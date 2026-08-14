@@ -22,7 +22,7 @@ define('PANEL_VERSION', '1.1.1');            // 面板当前版本号（发版�
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
-define('UPDATE_OWNER', 'huangsongping183');          // 仓库所有者
+define('UPDATE_OWNER', 'starchaser-cyber');          // 仓库所有者
 define('UPDATE_REPO', 'march7th-assistant-web-management-panel');          // 仓库名
 define('UPDATE_BRANCH', 'main');             // 仓库分支
 

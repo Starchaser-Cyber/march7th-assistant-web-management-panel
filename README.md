@@ -247,7 +247,7 @@ chmod 666 /home/march7thassistant/config.yaml
 | `UPDATE_ENABLED` | 是否启用自动检查 | `true` |
 | `UPDATE_TYPE` | 更新源类型 | `'github'`（默认） / `'gitea'` |
 | `UPDATE_HOST` | 实例地址（github 时忽略） | `'https://github.com'` |
-| `UPDATE_OWNER` | 仓库所有者 | `'huangsongping183'` |
+| `UPDATE_OWNER` | 仓库所有者 | `'starchaser-cyber'` |
 | `UPDATE_REPO` | 仓库名 | `'march7th-assistant-web-management-panel'` |
 | `UPDATE_BRANCH` | 仓库分支 | `'main'` |
 
