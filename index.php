@@ -1,7 +1,7 @@
 <?php
 /**
- * March7th Assistant 网页管理面板 v1.2
- * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 服务器资源仪表盘
+ * March7th Assistant 网页管理面板 v1.1.1
+ * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载
  * 纯原生 PHP 单文件 · 宝塔友好
  */
 declare(strict_types=1);
@@ -18,7 +18,7 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.2');              // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.1.1');            // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -411,189 +411,6 @@ function config_backup() {
     return false;
 }
 
-/* ===== 服务器资源监控 (v1.2) ===== */
-function sys_read($path) {
-    if (!is_readable($path)) return null;
-    $c = @file_get_contents($path);
-    return $c === false ? null : $c;
-}
-
-/** 读取 /proc/stat CPU 累计 jiffies，返回 [total, idle] */
-function sys_proc_stat() {
-    $raw = sys_read('/proc/stat');
-    if ($raw === null) return null;
-    $line = null;
-    foreach (explode("\n", $raw) as $l) {
-        if (strncmp($l, 'cpu ', 4) === 0) { $line = $l; break; }
-    }
-    if ($line === null) return null;
-    $p = preg_split('/\s+/', trim($line));
-    $total = 0;
-    for ($i = 1; $i <= 8; $i++) { if (isset($p[$i])) $total += (float)$p[$i]; }
-    $idle = (float)($p[4] ?? 0) + (float)($p[5] ?? 0);
-    return array($total, $idle);
-}
-
-/** 内存信息（字节） */
-function sys_meminfo() {
-    $raw = sys_read('/proc/meminfo');
-    if ($raw === null) return null;
-    $get = function($key) use ($raw) {
-        if (preg_match('/^' . $key . ':\s+(\d+)\s*kB/m', $raw, $m)) return (float)$m[1] * 1024;
-        return null;
-    };
-    $total = $get('MemTotal');
-    $avail = $get('MemAvailable');
-    if ($total === null || $avail === null) return null;
-    $used = $total - $avail;
-    return array('total' => $total, 'used' => $used, 'percent' => $total > 0 ? round($used / $total * 100, 1) : 0);
-}
-
-/** 磁盘分区列表（真实文件系统挂载点） */
-function sys_disks() {
-    $disks = array();
-    $raw = sys_read('/proc/mounts');
-    $realFs = array('ext2','ext3','ext4','xfs','btrfs','f2fs','zfs','ntfs','vfat','exfat');
-    if ($raw !== null) {
-        foreach (explode("\n", $raw) as $l) {
-            $p = preg_split('/\s+/', trim($l));
-            if (count($p) < 3) continue;
-            $dev = $p[0];
-            $mount = $p[1];
-            $fs = $p[2];
-            if (!in_array($fs, $realFs, true)) continue;
-            if ($dev === 'overlay' || $dev === 'tmpfs' || strpos($dev, '/dev/') !== 0) continue;
-            $total = @disk_total_space($mount);
-            $free = @disk_free_space($mount);
-            if ($total === false || $free === false || $total <= 0) continue;
-            $used = $total - $free;
-            $disks[] = array('mount' => $mount, 'total' => $total, 'used' => $used, 'percent' => round($used / $total * 100, 1));
-        }
-    }
-    if (!$disks) {
-        $total = @disk_total_space('/');
-        $free = @disk_free_space('/');
-        if ($total !== false && $free !== false && $total > 0) {
-            $used = $total - $free;
-            $disks[] = array('mount' => '/', 'total' => $total, 'used' => $used, 'percent' => round($used / $total * 100, 1));
-        }
-    }
-    return $disks;
-}
-
-/** 网卡累计收发字节（排除 lo） */
-function sys_netdev() {
-    $raw = sys_read('/proc/net/dev');
-    if ($raw === null) return null;
-    $rx = 0;
-    $tx = 0;
-    $list = array();
-    foreach (explode("\n", $raw) as $l) {
-        if (!preg_match('/^\s*([a-zA-Z0-9_.-]+):\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s*$/', $l, $m)) continue;
-        $if = $m[1];
-        if ($if === 'lo') continue;
-        $rx += (float)$m[2];
-        $tx += (float)$m[10];
-        $list[] = array('if' => $if, 'rx' => (float)$m[2], 'tx' => (float)$m[10]);
-    }
-    return array('rx' => $rx, 'tx' => $tx, 'list' => $list);
-}
-
-/** 物理磁盘累计读写字节 */
-function sys_diskio() {
-    $raw = sys_read('/proc/diskstats');
-    if ($raw === null) return null;
-    $read = 0;
-    $write = 0;
-    foreach (explode("\n", $raw) as $l) {
-        if (!preg_match('/^\s*(\d+)\s+(\d+)\s+([a-zA-Z0-9_]+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/', $l, $m)) continue;
-        $name = $m[3];
-        if (!preg_match('/^(sd[a-z]+|vd[a-z]+|hd[a-z]+|xvd[a-z]+|nvme\d+n\d+)$/', $name)) continue;
-        $read += (float)$m[6] * 512;
-        $write += (float)$m[10] * 512;
-    }
-    return array('read' => $read, 'write' => $write);
-}
-
-/** 汇总服务器资源数据（含 0.8s 采样求实时速率） */
-function server_stats() {
-    $stat1 = sys_proc_stat();
-    $net1 = sys_netdev();
-    $io1 = sys_diskio();
-    usleep(800000);
-    $stat2 = sys_proc_stat();
-    $net2 = sys_netdev();
-    $io2 = sys_diskio();
-
-    $cpu = null;
-    if ($stat1 && $stat2) {
-        $dTotal = $stat2[0] - $stat1[0];
-        $dIdle = $stat2[1] - $stat1[1];
-        if ($dTotal > 0) $cpu = round(($dTotal - $dIdle) / $dTotal * 100, 1);
-    }
-
-    $net = null;
-    if ($net1 && $net2) {
-        $drx = max(0, $net2['rx'] - $net1['rx']);
-        $dtx = max(0, $net2['tx'] - $net1['tx']);
-        $net = array(
-            'rx' => round($drx / 0.8),
-            'tx' => round($dtx / 0.8),
-            'rxTotal' => $net2['rx'],
-            'txTotal' => $net2['tx'],
-            'ifs' => $net2['list']
-        );
-    }
-
-    $io = null;
-    if ($io1 && $io2) {
-        $io = array(
-            'read' => round(max(0, $io2['read'] - $io1['read']) / 0.8),
-            'write' => round(max(0, $io2['write'] - $io1['write']) / 0.8)
-        );
-    }
-
-    $load = null;
-    $raw = sys_read('/proc/loadavg');
-    if ($raw !== null) {
-        $p = preg_split('/\s+/', trim($raw));
-        $load = array_map('floatval', array_slice($p, 0, 3));
-    }
-
-    $uptime = null;
-    $raw = sys_read('/proc/uptime');
-    if ($raw !== null) {
-        $p = explode(' ', trim($raw));
-        $uptime = (float)$p[0];
-    }
-
-    $cores = 1;
-    $raw = sys_read('/proc/cpuinfo');
-    if ($raw !== null) {
-        $c = preg_match_all('/^processor\s*:/m', $raw, $m);
-        if ($c) $cores = $c;
-    }
-
-    $os = php_uname('s') . ' ' . php_uname('r');
-    $raw = sys_read('/etc/os-release');
-    if ($raw !== null && preg_match('/^PRETTY_NAME="?([^"\n]+)"?/m', $raw, $m)) {
-        $os = $m[1];
-    }
-
-    return array(
-        'ok' => true,
-        'cpu' => array('usage' => $cpu, 'cores' => $cores, 'load' => $load),
-        'mem' => sys_meminfo(),
-        'disk' => sys_disks(),
-        'net' => $net,
-        'io' => $io,
-        'uptime' => $uptime,
-        'host' => php_uname('n'),
-        'os' => $os,
-        'time' => date('Y-m-d H:i:s')
-    );
-}
-
 /* ===== 自动更新 ===== */
 function http_get($url, $timeout = 8) {
     if (function_exists('curl_init')) {
@@ -784,11 +601,6 @@ if (isset($_GET['ajax']) && is_auth()) {
     if ($ajax === 'check_update') {
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode(check_update(), JSON_UNESCAPED_UNICODE);
-        exit;
-    }
-    if ($ajax === 'sysinfo') {
-        header('Content-Type: application/json; charset=utf-8');
-        echo json_encode(server_stats(), JSON_UNESCAPED_UNICODE);
         exit;
     }
     exit;
@@ -1063,22 +875,6 @@ a { color:var(--primary); text-decoration:none; }
 .card h2 { font-size:15px; font-weight:600; margin-bottom:14px; display:flex; align-items:center; gap:8px; }
 .card h2 .icon { font-size:18px; }
 
-/* 服务器资源仪表盘 (v1.2) */
-.sys-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; margin-bottom:14px; }
-.sys-item { background:var(--card2); border-radius:10px; padding:14px; border:1px solid var(--border); }
-.sys-label { font-size:12px; color:var(--muted); font-weight:600; margin-bottom:8px; }
-.sys-bar { height:8px; background:rgba(128,128,128,.15); border-radius:99px; overflow:hidden; margin-bottom:8px; }
-.sys-bar-fill { height:100%; border-radius:99px; background:linear-gradient(90deg,var(--primary),#8b5cf6); transition:width .6s ease; width:0%; }
-.sys-bar-fill.warn { background:linear-gradient(90deg,#f59e0b,#ef4444); }
-.sys-num { font-size:20px; font-weight:700; line-height:1.2; }
-.sys-num .unit { font-size:13px; color:var(--muted); font-weight:500; }
-.sys-sub { font-size:12px; color:var(--muted); margin-top:2px; }
-.sys-load { font-size:20px; font-weight:700; line-height:1.2; }
-.sys-info-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; }
-.sys-info { background:var(--card2); border-radius:8px; padding:10px 12px; display:flex; align-items:center; gap:8px; border:1px solid var(--border); }
-.sys-info .sys-k { font-size:12px; color:var(--muted); white-space:nowrap; }
-.sys-info .sys-v { font-size:13px; font-weight:600; word-break:break-all; }
-
 /* Messages */
 .msg { padding:12px 16px; border-radius:10px; margin-bottom:16px; font-size:14px; display:flex; align-items:center; gap:8px; }
 .msg.ok { background:var(--green-bg); color:var(--green); border:1px solid var(--green); }
@@ -1252,44 +1048,6 @@ a { color:var(--primary); text-decoration:none; }
 
 <!-- ===== 概览 ===== -->
 <div class="tab-panel active" id="panel-overview">
-  <div class="card">
-    <h2><span class="icon">🖥️</span> 服务器资源 <button class="btn small gray" onclick="refreshSysInfo()" style="margin-left:auto;">刷新</button></h2>
-    <div class="sys-grid">
-      <div class="sys-item">
-        <div class="sys-label">CPU 占用</div>
-        <div class="sys-bar"><div class="sys-bar-fill" id="sysCpuBar" style="width:0%"></div></div>
-        <div class="sys-num"><span id="sysCpu">--</span><span class="unit">%</span></div>
-        <div class="sys-sub" id="sysCpuCore"></div>
-      </div>
-      <div class="sys-item">
-        <div class="sys-label">内存占用</div>
-        <div class="sys-bar"><div class="sys-bar-fill" id="sysMemBar" style="width:0%"></div></div>
-        <div class="sys-num"><span id="sysMem">--</span></div>
-        <div class="sys-sub" id="sysMemDetail"></div>
-      </div>
-      <div class="sys-item">
-        <div class="sys-label">硬盘占用</div>
-        <div class="sys-bar"><div class="sys-bar-fill" id="sysDiskBar" style="width:0%"></div></div>
-        <div class="sys-num"><span id="sysDisk">--</span></div>
-        <div class="sys-sub" id="sysDiskDetail"></div>
-      </div>
-      <div class="sys-item">
-        <div class="sys-label">系统负载</div>
-        <div class="sys-load" id="sysLoad">--</div>
-        <div class="sys-sub" id="sysUptime"></div>
-      </div>
-    </div>
-    <div class="sys-info-grid">
-      <div class="sys-info"><span class="sys-k">网络 ↓</span><span class="sys-v" id="sysNetRx">--</span></div>
-      <div class="sys-info"><span class="sys-k">网络 ↑</span><span class="sys-v" id="sysNetTx">--</span></div>
-      <div class="sys-info"><span class="sys-k">磁盘读</span><span class="sys-v" id="sysIoR">--</span></div>
-      <div class="sys-info"><span class="sys-k">磁盘写</span><span class="sys-v" id="sysIoW">--</span></div>
-      <div class="sys-info"><span class="sys-k">主机</span><span class="sys-v" id="sysHost">--</span></div>
-      <div class="sys-info"><span class="sys-k">系统</span><span class="sys-v" id="sysOs">--</span></div>
-    </div>
-    <p class="tip" style="margin:10px 0 0;">数据实时采样，随自动刷新同步更新；网络/磁盘为实时速率（约 0.8 秒采样间隔）。</p>
-  </div>
-
   <div class="card">
     <h2><span class="icon">📦</span> 容器状态 <button class="btn small gray" onclick="refreshStatus()" style="margin-left:auto;">刷新</button></h2>
     <div class="codebox" id="statusBox"><?php $st = container_status(); echo $st === '' ? '(无法获取，请检查 www 用户 docker 权限)' : h($st); ?></div>
@@ -1616,69 +1374,6 @@ function hideUpdate() {
 var _logTimer = null;
 var _statusTimer = null;
 
-function fmtBytes(b, dp) {
-  if (b === null || b === undefined || isNaN(b)) return '--';
-  dp = dp || 1;
-  var units = ['B','KB','MB','GB','TB'];
-  var i = 0;
-  while (b >= 1024 && i < units.length - 1) { b /= 1024; i++; }
-  return b.toFixed(i === 0 ? 0 : dp) + ' ' + units[i];
-}
-
-function setSysBar(id, percent) {
-  var el = document.getElementById(id);
-  if (!el) return;
-  percent = Math.max(0, Math.min(100, percent));
-  el.style.width = percent + '%';
-  el.className = 'sys-bar-fill' + (percent >= 80 ? ' warn' : '');
-}
-
-function refreshSysInfo() {
-  fetch('?ajax=sysinfo&t=' + Date.now()).then(function(r) { return r.json(); }).then(function(d) {
-    if (!d || !d.ok) return;
-    var cpu = d.cpu ? d.cpu.usage : null;
-    if (cpu !== null) {
-      document.getElementById('sysCpu').textContent = cpu.toFixed(1);
-      setSysBar('sysCpuBar', cpu);
-    }
-    document.getElementById('sysCpuCore').textContent = d.cpu && d.cpu.cores ? d.cpu.cores + ' 核' : '';
-
-    var mem = d.mem;
-    if (mem) {
-      document.getElementById('sysMem').textContent = fmtBytes(mem.used) + ' / ' + fmtBytes(mem.total);
-      setSysBar('sysMemBar', mem.percent);
-      document.getElementById('sysMemDetail').textContent = mem.percent + '%';
-    }
-
-    var disk = d.disk && d.disk.length ? d.disk[0] : null;
-    if (disk) {
-      document.getElementById('sysDisk').textContent = fmtBytes(disk.used) + ' / ' + fmtBytes(disk.total);
-      setSysBar('sysDiskBar', disk.percent);
-      document.getElementById('sysDiskDetail').textContent = disk.percent + '% · ' + disk.mount + (d.disk.length > 1 ? ' 等 ' + d.disk.length + ' 个分区' : '');
-    }
-
-    if (d.cpu && d.cpu.load) {
-      document.getElementById('sysLoad').textContent = d.cpu.load[0].toFixed(2) + ' ' + d.cpu.load[1].toFixed(2) + ' ' + d.cpu.load[2].toFixed(2);
-    }
-    if (d.uptime !== null && d.uptime !== undefined) {
-      var s = Math.floor(d.uptime);
-      var days = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
-      document.getElementById('sysUptime').textContent = '运行 ' + days + '天' + h + '小时' + m + '分';
-    }
-
-    if (d.net) {
-      document.getElementById('sysNetRx').textContent = fmtBytes(d.net.rx) + '/s';
-      document.getElementById('sysNetTx').textContent = fmtBytes(d.net.tx) + '/s';
-    }
-    if (d.io) {
-      document.getElementById('sysIoR').textContent = fmtBytes(d.io.read) + '/s';
-      document.getElementById('sysIoW').textContent = fmtBytes(d.io.write) + '/s';
-    }
-    if (d.host) document.getElementById('sysHost').textContent = d.host;
-    if (d.os) document.getElementById('sysOs').textContent = d.os;
-  }).catch(function() {});
-}
-
 function refreshLog() {
   fetch('?ajax=log').then(function(r) { return r.text(); }).then(function(t) {
     var box = document.getElementById('logBox');
@@ -1713,7 +1408,7 @@ function startAutoRefresh() {
   var ms = parseInt(document.getElementById('refreshInterval').value) || 5000;
   stopAutoRefresh();
   _logTimer = setInterval(refreshLog, ms);
-  _statusTimer = setInterval(function() { refreshStatus(); refreshSysInfo(); }, 10000);
+  _statusTimer = setInterval(refreshStatus, 10000);
 }
 function stopAutoRefresh() {
   if (_logTimer) { clearInterval(_logTimer); _logTimer = null; }
@@ -1722,7 +1417,6 @@ function stopAutoRefresh() {
 
 // Init auto-refresh
 refreshStatus();
-refreshSysInfo();
 startAutoRefresh();
 
 /* ===== Save + Restart ===== */
