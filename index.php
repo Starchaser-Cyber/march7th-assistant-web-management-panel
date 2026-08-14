@@ -1,7 +1,7 @@
 <?php
 /**
- * March7th Assistant 网页管理面板 v2
- * 现代化 UI + 图形化配置编辑 + 实时状态
+ * March7th Assistant 网页管理面板 v1.1
+ * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复
  * 纯原生 PHP 单文件 · 宝塔友好
  */
 declare(strict_types=1);
@@ -18,7 +18,7 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.0');              // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.1');              // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -560,6 +560,19 @@ if (isset($_GET['ajax']) && is_auth()) {
     exit;
 }
 
+/* ===== 下载配置备份 ===== */
+if (isset($_GET['download']) && $_GET['download'] === 'config' && is_auth()) {
+    if (!is_file(CONFIG_PATH)) {
+        header('Location: index.php');
+        exit;
+    }
+    header('Content-Type: application/octet-stream; charset=utf-8');
+    header('Content-Disposition: attachment; filename="config.yaml.bak.' . date('YmdHis') . '.yaml"');
+    header('Content-Length: ' . (string) filesize(CONFIG_PATH));
+    readfile(CONFIG_PATH);
+    exit;
+}
+
 /* ===== POST 请求处理 ===== */
 $msg = '';
 $err = '';
@@ -656,6 +669,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $msg = $r['msg'] . '（备份：' . ($bak ? basename($bak) : '无') . '）。需重启容器生效。';
             } else {
                 $err = $r['msg'];
+            }
+        }
+        // 配置恢复 - 上传备份文件
+        elseif ($action === 'restore_config') {
+            if (empty($_FILES['cfg_file']) || $_FILES['cfg_file']['error'] !== UPLOAD_ERR_OK) {
+                $err = '未收到上传文件或上传失败';
+            } else {
+                $fname = $_FILES['cfg_file']['name'];
+                $fsize = (int) $_FILES['cfg_file']['size'];
+                $ext = strtolower(pathinfo($fname, PATHINFO_EXTENSION));
+                if (!in_array($ext, array('yaml', 'yml'), true)) {
+                    $err = '文件格式错误，请上传 .yaml / .yml 文件';
+                } elseif ($fsize <= 0 || $fsize > 2 * 1024 * 1024) {
+                    $err = '文件为空或过大（最大 2MB）';
+                } else {
+                    $content = @file_get_contents($_FILES['cfg_file']['tmp_name']);
+                    if ($content === false || strlen(trim($content)) < 10 || strpos($content, ':') === false) {
+                        $err = '文件内容异常，未识别到有效 YAML 配置';
+                    } else {
+                        $bak = config_backup();
+                        $r = @file_put_contents(CONFIG_PATH, $content);
+                        if ($r === false) {
+                            $err = '写入失败，请检查文件权限：chmod 666 ' . CONFIG_PATH;
+                        } else {
+                            $msg = '配置已恢复（' . h($fname) . '），原配置备份：' . ($bak ? basename($bak) : '无') . '。需重启容器生效。';
+                        }
+                    }
+                }
             }
         }
     }
@@ -983,6 +1024,20 @@ a { color:var(--primary); text-decoration:none; }
       <div class="info-item"><div class="label">Config</div><div class="value" style="font-size:13px;"><?php echo is_file(CONFIG_PATH) ? '✅ 存在' : '❌ 不存在'; ?></div></div>
       <div class="info-item"><div class="label">最近日志</div><div class="value" style="font-size:13px;"><?php $lp = latest_log_path(); echo $lp ? h(basename($lp)) : '暂无'; ?></div></div>
     </div>
+  </div>
+
+  <div class="card">
+    <h2><span class="icon">💾</span> 配置备份</h2>
+    <div class="btn-group">
+      <a href="?download=config" class="btn primary">⬇️ 下载备份</a>
+    </div>
+    <form method="post" enctype="multipart/form-data" style="margin-top:10px;display:flex;gap:8px;align-items:center;">
+      <?php echo csrf_field(); ?>
+      <input type="hidden" name="action" value="restore_config">
+      <input type="file" name="cfg_file" accept=".yaml,.yml" style="flex:1;font-size:13px;">
+      <button type="submit" class="btn orange small" onclick="return confirm('恢复配置会用上传文件覆盖当前 config.yaml，确定？');">⬆️ 恢复配置</button>
+    </form>
+    <p class="tip" style="margin:10px 0 0;">下载备份可把配置导出到本地保存；恢复前会自动备份当前文件，恢复后需重启容器生效。</p>
   </div>
 </div>
 
