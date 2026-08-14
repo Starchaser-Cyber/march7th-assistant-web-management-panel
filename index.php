@@ -1,7 +1,7 @@
 <?php
 /**
- * March7th Assistant 网页管理面板 v1.1.1
- * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载
+ * March7th Assistant 网页管理面板 v1.2
+ * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询
  * 纯原生 PHP 单文件 · 宝塔友好
  */
 declare(strict_types=1);
@@ -18,7 +18,7 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.1.1');            // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.2');            // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -294,6 +294,32 @@ function tail_file($path, $lines = 200) {
     $out = array(); $code = 0;
     exec('tail -n ' . (int)$lines . ' ' . escapeshellarg($path) . ' 2>&1', $out, $code);
     return implode("\n", $out);
+}
+function log_files() {
+    $files = glob(PROJECT_DIR . '/logs/*.log');
+    if (!$files) return array();
+    usort($files, function($a, $b) { return filemtime($b) - filemtime($a); });
+    return array_values($files);
+}
+function filter_log($path, $opts = array()) {
+    $lines = array(); $code = 0;
+    exec('tail -n ' . (int)($opts['lines'] ?? 2000) . ' ' . escapeshellarg($path) . ' 2>&1', $lines, $code);
+    $kw    = isset($opts['keyword']) ? trim((string)$opts['keyword']) : '';
+    $level = isset($opts['level']) ? strtoupper(trim((string)$opts['level'])) : '';
+    $hours = isset($opts['hours']) ? (int)$opts['hours'] : 0;
+    $out = array();
+    foreach ($lines as $line) {
+        if ($kw !== '' && stripos($line, $kw) === false) continue;
+        if ($level !== '' && $level !== 'ALL') {
+            if (!preg_match('/\|\s*' . preg_quote($level, '/') . '\s*\|/i', $line)) continue;
+        }
+        if ($hours > 0) {
+            $ts = strtotime(substr($line, 0, 19));
+            if ($ts !== false && $ts < time() - $hours * 3600) continue;
+        }
+        $out[] = $line;
+    }
+    return array('lines' => $out, 'total' => count($out));
 }
 function container_status() {
     $r = compose('ps');
@@ -577,9 +603,31 @@ if (isset($_GET['ajax']) && is_auth()) {
         exit;
     }
     if ($ajax === 'log') {
-        header('Content-Type: text/plain; charset=utf-8');
-        $lp = latest_log_path();
-        echo $lp ? tail_file($lp, 300) : '(暂无日志文件，任务运行后会生成)';
+        header('Content-Type: application/json; charset=utf-8');
+        $files = log_files();
+        $baseNames = array_map('basename', $files);
+        $file = isset($_GET['file']) ? trim((string)$_GET['file']) : '';
+        $idx = $file === '' ? 0 : array_search($file, $baseNames);
+        if ($idx === false) $idx = 0;
+        $path = $files[$idx] ?? null;
+        $opts = array(
+            'keyword' => (string)($_GET['keyword'] ?? ''),
+            'level'   => (string)($_GET['level'] ?? ''),
+            'hours'   => (int)($_GET['hours'] ?? 0),
+            'lines'   => max(100, min(5000, (int)($_GET['lines'] ?? 2000))),
+        );
+        if ($path) {
+            $r = filter_log($path, $opts);
+            echo json_encode(array(
+                'ok'    => true,
+                'file'  => basename($path),
+                'files' => $baseNames,
+                'total' => $r['total'],
+                'lines' => $r['lines'],
+            ), JSON_UNESCAPED_UNICODE);
+        } else {
+            echo json_encode(array('ok' => true, 'file' => null, 'files' => array(), 'total' => 0, 'lines' => '(暂无日志文件，任务运行后会生成)'), JSON_UNESCAPED_UNICODE);
+        }
         exit;
     }
     if ($ajax === 'running') {
@@ -616,6 +664,29 @@ if (isset($_GET['download']) && $_GET['download'] === 'config' && is_auth()) {
     header('Content-Disposition: attachment; filename="config.yaml.bak.' . date('YmdHis') . '.yaml"');
     header('Content-Length: ' . (string) filesize(CONFIG_PATH));
     readfile(CONFIG_PATH);
+    exit;
+}
+
+/* ===== 导出日志（应用当前过滤条件） ===== */
+if (isset($_GET['export_log']) && $_GET['export_log'] === '1' && is_auth()) {
+    $files = log_files();
+    $baseNames = array_map('basename', $files);
+    $file = isset($_GET['file']) ? trim((string)$_GET['file']) : '';
+    $idx = $file === '' ? 0 : array_search($file, $baseNames);
+    if ($idx === false) $idx = 0;
+    $path = $files[$idx] ?? null;
+    if ($path) {
+        $opts = array(
+            'keyword' => (string)($_GET['keyword'] ?? ''),
+            'level'   => (string)($_GET['level'] ?? ''),
+            'hours'   => (int)($_GET['hours'] ?? 0),
+            'lines'   => 5000,
+        );
+        $r = filter_log($path, $opts);
+        header('Content-Type: text/plain; charset=utf-8');
+        header('Content-Disposition: attachment; filename="m7a_log_' . date('Ymd_His') . '.log"');
+        echo implode("\n", $r['lines']);
+    }
     exit;
 }
 
@@ -936,6 +1007,12 @@ a { color:var(--primary); text-decoration:none; }
 .log-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px; }
 .auto-refresh { display:flex; align-items:center; gap:6px; font-size:13px; color:var(--muted); }
 .auto-refresh input { accent-color:var(--primary); }
+.log-filter { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px; }
+.log-filter input[type=text] { flex:1; min-width:160px; padding:7px 12px; border:1px solid var(--border); border-radius:8px; font-size:13px; background:var(--card); color:var(--text); }
+.log-filter input[type=text]:focus { outline:none; border-color:var(--primary); }
+.log-filter select { padding:7px 10px; border:1px solid var(--border); border-radius:8px; font-size:13px; background:var(--card); color:var(--text); }
+.log-count { font-size:12px; color:var(--muted); }
+.hl { background:#fde68a; color:#92400e; border-radius:3px; padding:0 2px; }
 
 /* Auth */
 .auth-wrap { min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; }
@@ -1228,7 +1305,27 @@ a { color:var(--primary); text-decoration:none; }
         <button class="btn small gray" onclick="refreshLog()">立即刷新</button>
       </div>
     </div>
-    <div class="codebox" id="logBox" style="max-height:600px;"><?php $lp = latest_log_path(); echo $lp ? h(tail_file($lp, 300)) : '(暂无日志文件，任务运行后会生成)'; ?></div>
+    <div class="log-filter">
+      <input type="text" id="logKeyword" placeholder="🔍 搜索关键词（回车立即过滤）" onkeyup="logKeywordKeyup(event)">
+      <select id="logLevel" onchange="refreshLog()">
+        <option value="">全部级别</option>
+        <option value="DEBUG">DEBUG</option>
+        <option value="INFO">INFO</option>
+        <option value="WARNING">WARNING</option>
+        <option value="ERROR">ERROR</option>
+      </select>
+      <select id="logHours" onchange="refreshLog()">
+        <option value="0">全部时间</option>
+        <option value="1">最近 1 小时</option>
+        <option value="6">最近 6 小时</option>
+        <option value="24">最近 24 小时</option>
+      </select>
+      <select id="logFile" onchange="refreshLog()"><option value="">加载中…</option></select>
+      <button class="btn small primary" id="exportLogBtn">⬇ 导出</button>
+      <button class="btn small gray" onclick="resetLogFilter()">↻ 重置</button>
+    </div>
+    <div class="log-count" id="logCount" style="margin-bottom:8px;"></div>
+    <div class="codebox" id="logBox" style="max-height:600px;"><div style="color:var(--muted);">日志加载中…</div></div>
   </div>
 </div>
 
@@ -1373,12 +1470,77 @@ function hideUpdate() {
 /* ===== AJAX refresh ===== */
 var _logTimer = null;
 var _statusTimer = null;
+var _logKeywordTimer = null;
 
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+function renderLogLine(line, kw) {
+  var esc = escapeHtml(line);
+  if (kw) {
+    var re = new RegExp(escapeRegExp(escapeHtml(kw)), 'gi');
+    esc = esc.replace(re, '<span class="hl">$&</span>');
+  }
+  return esc;
+}
+function logKeywordKeyup(e) {
+  if (e.key === 'Enter') { refreshLog(); return; }
+  clearTimeout(_logKeywordTimer);
+  _logKeywordTimer = setTimeout(refreshLog, 300);
+}
+function logFilterParams() {
+  var kw = document.getElementById('logKeyword') ? document.getElementById('logKeyword').value.trim() : '';
+  var lv = document.getElementById('logLevel') ? document.getElementById('logLevel').value : '';
+  var hh = document.getElementById('logHours') ? document.getElementById('logHours').value : '0';
+  var ff = document.getElementById('logFile') ? document.getElementById('logFile').value : '';
+  return 'keyword=' + encodeURIComponent(kw) + '&level=' + encodeURIComponent(lv) + '&hours=' + encodeURIComponent(hh) + '&file=' + encodeURIComponent(ff);
+}
+function fillLogFiles(files, current) {
+  var sel = document.getElementById('logFile');
+  if (!sel) return;
+  var html = '';
+  for (var i = 0; i < files.length; i++) {
+    html += '<option value="' + escapeHtml(files[i]) + '"' + (files[i] === current ? ' selected' : '') + '>' + escapeHtml(files[i]) + '</option>';
+  }
+  sel.innerHTML = html || '<option value="">（无日志文件）</option>';
+}
 function refreshLog() {
-  fetch('?ajax=log').then(function(r) { return r.text(); }).then(function(t) {
+  fetch('?ajax=log&' + logFilterParams()).then(function(r) { return r.json(); }).then(function(d) {
+    if (!d || !d.ok) return;
+    fillLogFiles(d.files || [], d.file);
     var box = document.getElementById('logBox');
-    if (box) { box.textContent = t; box.scrollTop = box.scrollHeight; }
+    var countEl = document.getElementById('logCount');
+    if (typeof d.lines === 'string') {
+      if (box) box.innerHTML = '<div style="color:var(--muted);">' + escapeHtml(d.lines) + '</div>';
+      if (countEl) countEl.textContent = '';
+      return;
+    }
+    var kw = document.getElementById('logKeyword') ? document.getElementById('logKeyword').value.trim() : '';
+    var hasFilter = kw !== '' || (document.getElementById('logLevel') && document.getElementById('logLevel').value !== '') || (document.getElementById('logHours') && document.getElementById('logHours').value !== '0');
+    var html = d.lines.map(function(line) { return renderLogLine(line, kw); }).join('\n');
+    if (box) {
+      var atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+      box.innerHTML = html;
+      if (!hasFilter && atBottom) box.scrollTop = box.scrollHeight;
+    }
+    if (countEl) countEl.textContent = '命中 ' + d.total + ' 条';
   }).catch(function() {});
+}
+function resetLogFilter() {
+  if (document.getElementById('logKeyword')) document.getElementById('logKeyword').value = '';
+  if (document.getElementById('logLevel')) document.getElementById('logLevel').value = '';
+  if (document.getElementById('logHours')) document.getElementById('logHours').value = '0';
+  refreshLog();
+}
+function initLogExport() {
+  var btn = document.getElementById('exportLogBtn');
+  if (btn) btn.onclick = function() {
+    var url = '?export_log=1&' + logFilterParams();
+    window.open(url, '_blank');
+  };
 }
 
 function refreshStatus() {
@@ -1417,7 +1579,9 @@ function stopAutoRefresh() {
 
 // Init auto-refresh
 refreshStatus();
+refreshLog();
 startAutoRefresh();
+initLogExport();
 
 /* ===== Save + Restart ===== */
 function restartAfterSave() {
