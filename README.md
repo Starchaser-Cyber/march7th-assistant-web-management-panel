@@ -1,4 +1,4 @@
-# March7th 网页管理面板 v2
+# March7th 网页管理面板 v1
 
 现代化 UI + 图形化配置编辑 + 实时状态，用于宝塔服务器上管理 Docker 版 March7th 小助手。
 
@@ -19,13 +19,13 @@
 
 ## 部署步骤
 
-### 1. 上传
-把 `index.php` 上传到宝塔网站根目录（如 `/www/wwwroot/192.168.1.42_9999/`）。
-
-### 2. 宝塔建站
-- 网站 → 添加站点 → 域名填 `IP:端口`（如 192.168.1.42:9999）
+### 1. 宝塔一键建站
+- 宝塔面板 → 网站 → 添加站点 → 域名填 `IP:端口`（如 192.168.1.42:9999）
 - **PHP 版本：8.x**（不要选"纯静态"）
 - 防火墙放行对应端口
+
+### 2. 上传文件
+把 `index.php` 上传到该站点根目录（如 `/www/wwwroot/192.168.1.42_9999/`）。
 
 ### 3. 解禁 PHP 函数
 宝塔 → 软件商店 → PHP-8.x → 设置 → 禁用函数 → 移除 `exec`、`shell_exec`、`passthru`
@@ -81,9 +81,9 @@ chmod 666 /home/march7thassistant/config.yaml
 
 ### 发版流程（维护者）
 1. 修改 `index.php` 顶部 `PANEL_VERSION`（如 `1.0` → `1.1`）
-2. `git add . && git commit -m "v2.2.0 更新说明" && git push`
+2. `git add . && git commit -m "v1.1 更新说明" && git push`
 3. 在 Gitea/GitHub 仓库页面 → Releases → **Create a new release**：
-   - Tag 填 `v2.2.0`（与 PANEL_VERSION 对应）
+   - Tag 填 `v1.1`（与 PANEL_VERSION 对应）
    - 标题写版本号，正文写更新日志
 4. 用户打开面板即可收到更新提醒
 
