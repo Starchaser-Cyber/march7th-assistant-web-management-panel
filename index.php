@@ -1,7 +1,7 @@
 <?php
 /**
- * March7th Assistant 网页管理面板 v1.1
- * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复
+ * March7th Assistant 网页管理面板 v1.1.1
+ * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载
  * 纯原生 PHP 单文件 · 宝塔友好
  */
 declare(strict_types=1);
@@ -18,7 +18,7 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.1');              // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.1.1');            // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -456,12 +456,33 @@ function update_raw_url() {
     return rtrim(UPDATE_HOST, '/') . '/' . rawurlencode(UPDATE_OWNER) . '/' . rawurlencode(UPDATE_REPO) . '/raw/branch/' . UPDATE_BRANCH . '/index.php';
 }
 
+/**
+ * 多镜像下载地址列表（v1.1.1+）
+ * 官方源失败时自动依次尝试加速镜像；时间戳参数用于绕过镜像缓存。
+ */
+function update_raw_urls() {
+    if (UPDATE_TYPE !== 'github') {
+        return array(update_raw_url());
+    }
+    $official = update_raw_url();
+    $mirrors = array(
+        $official,                                   // 0 官方源
+        'https://ghfast.top/' . $official,           // 1 加速镜像
+        'https://gh-proxy.com/' . $official,         // 2 加速镜像
+        'https://ghproxy.net/' . $official,          // 3 加速镜像
+        'https://ghps.cc/' . $official,              // 4 加速镜像
+    );
+    $ts = '?t=' . time();
+    foreach ($mirrors as $i => $u) {
+        $mirrors[$i] = $u . $ts;
+    }
+    return $mirrors;
+}
+
 
 function test_update_source() {
     $api = update_api_url();
-    $raw = update_raw_url();
     $ar  = http_get($api, 8);
-    $rr  = http_get($raw, 8);
 
     $api_state = 'fail';
     if ($ar['code'] === 200 && stripos((string)$ar['body'], 'tag_name') !== false) {
@@ -470,12 +491,29 @@ function test_update_source() {
         $api_state = 'ok_no_release';
     }
 
-    $raw_ok = ($rr['code'] === 200 && stripos(ltrim((string)$rr['body']), '<?php') === 0);
+    $mirrors = array();
+    $raw_ok  = false;
+    $raw_code = 0;
+    foreach (update_raw_urls() as $i => $url) {
+        $rr  = http_get($url, 8);
+        $ok  = ($rr['code'] === 200 && stripos(ltrim((string)$rr['body']), '<?php') === 0);
+        $mirrors[] = array(
+            'name' => $i === 0 ? '官方源' : '镜像' . $i,
+            'url'  => $url,
+            'code' => $rr['code'],
+            'ok'   => $ok,
+        );
+        if ($i === 0) {
+            $raw_ok  = $ok;
+            $raw_code = $rr['code'];
+        }
+    }
 
     return array(
-        'ok'  => ($api_state !== 'fail') && $raw_ok,
-        'api' => array('url' => $api, 'code' => $ar['code'], 'state' => $api_state),
-        'raw' => array('url' => $raw, 'code' => $rr['code'], 'ok' => $raw_ok),
+        'ok'      => ($api_state !== 'fail') && $raw_ok,
+        'api'     => array('url' => $api, 'code' => $ar['code'], 'state' => $api_state),
+        'raw'     => array('url' => update_raw_url(), 'code' => $raw_code, 'ok' => $raw_ok),
+        'mirrors' => $mirrors,
     );
 }
 
@@ -503,23 +541,31 @@ function check_update() {
 
 function do_update() {
     if (!UPDATE_ENABLED) return array('ok' => false, 'msg' => '未启用自动更新');
-    $r = http_get(update_raw_url(), 30);
-    if ($r['code'] !== 200 || empty($r['body'])) {
-        return array('ok' => false, 'msg' => '下载新版失败（HTTP ' . $r['code'] . '）');
+    $errors = array();
+    foreach (update_raw_urls() as $i => $url) {
+        $src = $i === 0 ? '官方源' : '加速镜像' . $i;
+        $r = http_get($url, 15);
+        if ($r['code'] !== 200 || empty($r['body'])) {
+            $errors[] = $src . ' HTTP ' . $r['code'];
+            continue;
+        }
+        $content = $r['body'];
+        if (stripos(ltrim($content), '<?php') !== 0) {
+            $errors[] = $src . '内容校验失败';
+            continue;
+        }
+        $bak = __DIR__ . '/index.php.bak.' . date('YmdHis');
+        if (!@copy(__FILE__, $bak)) {
+            return array('ok' => false, 'msg' => '备份当前文件失败，已中止更新');
+        }
+        if (@file_put_contents(__FILE__, $content) === false) {
+            @copy($bak, __FILE__);
+            return array('ok' => false, 'msg' => '写入新版本失败，已回滚到备份');
+        }
+        return array('ok' => true, 'msg' => '更新完成（来源：' . $src . '），页面即将刷新', 'bak' => basename($bak));
     }
-    $content = $r['body'];
-    if (stripos(ltrim($content), '<?php') !== 0) {
-        return array('ok' => false, 'msg' => '下载内容校验失败（不是有效的 PHP 文件），已保留原文件');
-    }
-    $bak = __DIR__ . '/index.php.bak.' . date('YmdHis');
-    if (!@copy(__FILE__, $bak)) {
-        return array('ok' => false, 'msg' => '备份当前文件失败，已中止更新');
-    }
-    if (@file_put_contents(__FILE__, $content) === false) {
-        @copy($bak, __FILE__);
-        return array('ok' => false, 'msg' => '写入新版本失败，已回滚到备份');
-    }
-    return array('ok' => true, 'msg' => '更新完成，页面即将刷新', 'bak' => basename($bak));
+    $detail = implode('；', $errors);
+    return array('ok' => false, 'msg' => '所有更新源下载失败（' . $detail . '）。请检查服务器网络，或在服务器配置代理后重试');
 }
 
 /* ===== AJAX 请求 ===== */
@@ -1050,6 +1096,7 @@ a { color:var(--primary); text-decoration:none; }
       <div class="info-item"><div class="label">仓库</div><div class="value" style="font-size:13px;"><?php echo h(UPDATE_OWNER . '/' . UPDATE_REPO); ?></div></div>
       <div class="info-item"><div class="label">API 连通</div><div class="value" id="srcApiStatus">未测试</div></div>
       <div class="info-item"><div class="label">文件下载</div><div class="value" id="srcRawStatus">未测试</div></div>
+      <div class="info-item"><div class="label">镜像加速</div><div class="value" id="srcMirrorStatus">未测试</div></div>
     </div>
   </div>
 
@@ -1296,14 +1343,26 @@ function doUpdate() {
 function testUpdateSource() {
   var apiEl = document.getElementById('srcApiStatus');
   var rawEl = document.getElementById('srcRawStatus');
-  apiEl.textContent = '测试中…'; rawEl.textContent = '测试中…';
+  var mirEl = document.getElementById('srcMirrorStatus');
+  apiEl.textContent = '测试中…'; rawEl.textContent = '测试中…'; mirEl.textContent = '测试中…';
   fetch('?ajax=test_update_source').then(function(r){ return r.json(); }).then(function(d){
-    if (!d) { apiEl.textContent = '失败'; rawEl.textContent = '失败'; return; }
+    if (!d) { apiEl.textContent = '失败'; rawEl.textContent = '失败'; mirEl.textContent = '失败'; return; }
     if (d.api && d.api.state === 'ok_release')      apiEl.textContent = '✅ 已发版（HTTP ' + d.api.code + '）';
     else if (d.api && d.api.state === 'ok_no_release') apiEl.textContent = '✅ 连通，尚未发版（HTTP ' + d.api.code + '）';
     else apiEl.textContent = '❌ HTTP ' + (d.api ? d.api.code : '失败') + '（检查仓库名/发版）';
-    rawEl.textContent = (d.raw && d.raw.ok) ? '✅ 可下载（HTTP ' + d.raw.code + '）' : '❌ HTTP ' + (d.raw ? d.raw.code : '失败') + '（文件未上传或路径不对）';
-  }).catch(function(){ apiEl.textContent = '网络错误'; rawEl.textContent = '网络错误'; });
+    rawEl.textContent = (d.raw && d.raw.ok) ? '✅ 可下载（HTTP ' + d.raw.code + '）' : '❌ HTTP ' + (d.raw ? d.raw.code : '失败') + '（官方源不通，将尝试镜像）';
+    if (d.mirrors && d.mirrors.length > 1) {
+      var okN = 0, list = [];
+      d.mirrors.forEach(function(m, i){
+        if (i === 0) return;
+        list.push(m.name + (m.ok ? '✅' : '❌' + m.code));
+        if (m.ok) okN++;
+      });
+      mirEl.textContent = okN > 0 ? '✅ ' + okN + ' 个可用（' + list.join(' ') + '）' : '❌ 全部不可用';
+    } else {
+      mirEl.textContent = '无';
+    }
+  }).catch(function(){ apiEl.textContent = '网络错误'; rawEl.textContent = '网络错误'; mirEl.textContent = '网络错误'; });
 }
 
 function hideUpdate() {

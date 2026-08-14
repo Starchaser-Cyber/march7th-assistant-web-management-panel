@@ -1,4 +1,4 @@
-# March7th 小助手网页管理面板 v1.1（单文件版）
+# March7th 小助手网页管理面板 v1.1.1（单文件版）
 
 > 浏览器里管三月七，告别 SSH 命令行。
 
@@ -8,7 +8,7 @@
 
 本面板是 [三月七小助手（March7thAssistant）](https://github.com/moesnow/March7thAssistant) 的配套网页管理工具。原项目是跑在电脑上的 GUI / 命令行程序，人不在电脑前就没法操作；本面板把它部署到服务器后，你用手机或电脑浏览器就能随时远程管理——启动日常任务、清体力、改配置、看日志，全程不需要命令行。
 
-- ✅ 适配已部署 Docker 版小助手的玩家；还没部署的，按下方步骤 10 分钟搞定
+- ✅ 适配已部署 Docker 版小助手的玩家；还没部署的，先按下方 [完整部署教程](#完整部署教程从零开始) 从零搞定（约 20 分钟）
 - ✅ 单文件 `index.php`，上传即用，无数据库、无框架依赖
 - ✅ 手机、电脑浏览器均可使用
 
@@ -19,7 +19,8 @@
 - 🚀 **执行任务**：全量运行 / 日常任务 / 清体力 / 测试通知 / 差分宇宙 / 模拟宇宙
 - 🔧 **容器操作**：重启、更新镜像（带确认弹窗）
 - 🔄 **自动更新**（v1.0+）：打开面板自动检查 GitHub/Gitea 新版本，有更新弹条提醒，一键更新（自动备份旧文件）
-- 🔗 **更新源测试**：一键测试更新源 API / 文件下载连通性，快速定位发版或网络问题
+- 🔗 **多镜像下载**（v1.1.1+）：官方源下载失败时自动依次尝试多个国内加速镜像，无需任何额外配置
+- 🔗 **更新源测试**：一键测试更新源 API / 文件下载 / 加速镜像连通性，快速定位发版或网络问题
 
 ### ⚙️ 配置编辑
 - ⚙️ **图形化配置编辑**：覆盖日常、体力、模拟宇宙、通知推送等 70+ 常用配置项，分组表单，开关/下拉框/输入框
@@ -36,11 +37,119 @@
 - 🔐 **密码保护**：首次访问设置密码，哈希存于 .panel_pass.php
 - 🛡️ **CSRF 防护**：防跨站请求伪造
 
-## 部署步骤
+## 完整部署教程（从零开始）
+
+> 还没部署三月七小助手的玩家，从这一节开始；已经部署过的，直接跳到 [部署本面板](#部署本面板)。
+>
+> 小助手 Docker 部署方式源自[原项目官方 Docker 教程](https://github.com/moesnow/March7thAssistant/blob/main/assets/docs/Docker.md)，本教程针对宝塔面板环境做了步骤化整理。
+
+### 前置要求
+- 一台 Linux 服务器：**2核 CPU / 4GB 内存**以上（小助手容器运行约需 1GB+ 内存）
+- 系统：Ubuntu 20.04+ / Debian 11+ / CentOS 7.9+ 均可
+- 已安装宝塔面板（[bt.cn](https://www.bt.cn) 官网一键安装）
+
+### 第一步：安装 Docker
+
+**方式 A：宝塔图形化安装（推荐新手）**
+1. 宝塔面板 → 软件商店 → 搜索「Docker」→ 安装「Docker管理器」插件
+2. 安装完成后 Docker 自动启动
+
+**方式 B：命令行安装（更通用）**
+```bash
+curl -fsSL https://get.docker.com | bash
+systemctl enable --now docker
+```
+
+**配置国内镜像加速（可选，推荐）**
+```bash
+mkdir -p /etc/docker
+cat > /etc/docker/daemon.json <<'EOF'
+{
+  "registry-mirrors": [
+    "https://docker.mirrors.aliyun.com",
+    "https://mirror.baidubce.com"
+  ]
+}
+EOF
+systemctl daemon-reload && systemctl restart docker
+```
+
+验证：`docker -v` 能看到版本号即可。
+
+### 第二步：部署三月七小助手（Docker）
+
+> 小助手 Docker 模式仅支持**云·星穹铁道**（云游戏），首次运行需用米游社 APP 扫码登录。
+
+**1. 创建项目目录**
+```bash
+mkdir -p /home/march7thassistant && cd /home/march7thassistant
+```
+
+**2. 下载配置文件**
+```bash
+curl -o config.yaml https://m7a.top/assets/config/config.example.yaml
+curl -o docker-compose.yml https://m7a.top/docker-compose.yml
+```
+
+**3. 修改 docker-compose.yml**
+宝塔文件管理器打开 `/home/march7thassistant/docker-compose.yml`：
+- 将 `build: .` 这行**注释掉**（行首加 `#`）
+- 取消 `image:` 行的注释
+- 中国大陆用户建议改用南京大学镜像源：
+  ```yaml
+  image: ghcr.nju.edu.cn/moesnow/march7thassistant:latest
+  ```
+- 确认存在 `shm_size: 1g`（没有就加上，避免浏览器崩溃）
+
+**4. 启动容器**
+```bash
+cd /home/march7thassistant && docker compose up -d
+```
+首次启动会拉取镜像（约 1-2GB），耐心等待。
+
+**5. 扫码登录（关键）**
+首次运行自动进入二维码登录模式：
+- 二维码图片保存在 `/home/march7thassistant/logs/qrcode_login.png`
+- 宝塔文件管理器双击打开该图片，用手机**米游社 APP** 扫码登录
+- 或用 `docker compose logs -f` 查看日志，日志里有二维码网址，可用在线工具（如[草料二维码](https://cli.im/)）生成二维码后扫码
+
+**6. 验证**
+```bash
+docker compose ps          # 容器状态应为 Up
+docker compose logs -f     # 看到"开始运行"相关日志即正常
+```
+
+部署完成后：
+- 小助手默认**每天凌晨 4:00 自动执行完整任务**，任务完成后自动循环等待
+- 手动执行任务（面板「执行任务」按钮调用的就是这些命令）：
+
+| 任务 | 命令 |
+|------|------|
+| 全量运行 | `docker exec m7a python main.py main` |
+| 仅日常任务 | `docker exec m7a python main.py daily` |
+| 清体力 | `docker exec m7a python main.py power` |
+| 差分宇宙 | `docker exec m7a python main.py divergent` |
+| 测试通知推送 | `docker exec m7a python main.py notify` |
+
+### 第三步：部署本面板
+
+小助手跑起来后，继续按下方 [部署本面板](#部署本面板) 的步骤安装网页管理面板（约 10 分钟）。
+
+### 小助手常见问题
+
+| 现象 | 原因 | 解决 |
+|------|------|------|
+| 日志截断 / 容器被杀 | 内存不足（OOM） | `docker inspect m7a \| grep -i oom` 确认；增大内存或 swap |
+| 报 tab crashed / shm 错误 | 共享内存不足 | docker-compose.yml 确保 `shm_size: 1g`，必要时 `2g` 后 `docker compose up -d` |
+| 登录状态丢失 | 浏览器数据丢失 | 重启容器后重新扫码：`docker compose restart` 然后 `docker compose logs -f` |
+| 卡在"启动浏览器中..." | 浏览器用户目录损坏 | `rm -rf /home/march7thassistant/3rdparty/WebBrowser/UserProfile` 后重启容器 |
+| 如何升级小助手 | 镜像更新 | `docker compose pull && docker compose up -d` |
+
+## 部署本面板
 
 > 预计 10 分钟完成。开始前请确认：
 > - 宝塔面板已安装，PHP 版本为 8.x
-> - Docker 版三月七小助手已部署（默认路径 `/home/march7thassistant`）
+> - Docker 版三月七小助手已部署（默认路径 `/home/march7thassistant`；若小助手装在别的目录，需同步修改 `index.php` 顶部的 `PROJECT_DIR`）
 > - 服务器防火墙已放行要使用的端口
 
 ### 1. 宝塔一键建站
@@ -84,7 +193,8 @@ chmod 666 /home/march7thassistant/config.yaml
 概览页「更新源」卡片可一键测试与更新源的连通性：
 
 - **API 连通**：调 Releases 接口，显示已发版 / 连通未发版 / HTTP 错误
-- **文件下载**：调 raw 文件接口，确认新版 `index.php` 可正常下载
+- **文件下载**：调官方 raw 文件接口，确认新版 `index.php` 可正常下载
+- **镜像加速**：依次测试各国内加速镜像的连通性，显示可用数量
 
 > 刚建仓库、还没发版时测试会提示「尚未发版 / HTTP 404」，属于正常现象；完成首次发版后应全部变为 ✅。
 
@@ -97,7 +207,7 @@ chmod 666 /home/march7thassistant/config.yaml
 
 | 常量 | 说明 | 示例 |
 |------|------|------|
-| `PANEL_VERSION` | 当前版本号（发版时修改） | `'1.1'` |
+| `PANEL_VERSION` | 当前版本号（发版时修改） | `'1.1.1'` |
 | `UPDATE_ENABLED` | 是否启用自动检查 | `true` |
 | `UPDATE_TYPE` | 更新源类型 | `'github'`（默认） / `'gitea'` |
 | `UPDATE_HOST` | 实例地址（github 时忽略） | `'https://github.com'` |
@@ -106,6 +216,12 @@ chmod 666 /home/march7thassistant/config.yaml
 | `UPDATE_BRANCH` | 仓库分支 | `'main'` |
 
 > 未配置仓库或没有 Release 时，面板静默跳过检查，不影响使用。
+
+### 多镜像下载说明（v1.1.1+）
+
+更新时按顺序尝试：官方源 → 加速镜像1 → 加速镜像2 → …，任一成功即完成更新，无需在镜像站注册或上传任何文件——加速镜像只是实时转发 GitHub 官方内容，你正常 push 到 GitHub 仓库即可。
+
+镜像列表在 `index.php` 的 `update_raw_urls()` 函数中维护，可自行增删；全部失败时面板会提示网络原因并建议配置代理。
 
 ## 安全提醒
 - 面板能触发游戏任务和修改配置，**务必设置强密码**
