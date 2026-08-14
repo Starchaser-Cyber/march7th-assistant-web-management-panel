@@ -1,4 +1,4 @@
-# March7th 网页管理面板 v2
+# March7th 网页管理面板 v1
 
 现代化 UI + 图形化配置编辑 + 实时状态，用于宝塔服务器上管理 Docker 版 March7th 小助手。
 
