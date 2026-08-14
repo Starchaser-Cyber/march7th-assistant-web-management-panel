@@ -1,6 +1,8 @@
 # March7th 网页管理面板 v1
 
-现代化 UI + 图形化配置编辑 + 实时状态，用于宝塔服务器上管理 Docker 版 March7th 小助手。
+本面板是 [三月七小助手（March7thAssistant）](https://github.com/moesnow/March7thAssistant)（崩坏：星穹铁道全自动游戏助手）的配套网页管理工具，供已部署 Docker 版小助手的玩家使用：在宝塔服务器上通过浏览器即可完成日常管理，无需命令行。
+
+现代化 UI + 图形化配置编辑 + 实时状态，开箱即用。
 
 ## 功能
 - 🔐 密码保护（首次访问设置密码，哈希存于 .panel_pass.php）
@@ -78,14 +80,6 @@ chmod 666 /home/march7thassistant/config.yaml
 | `UPDATE_OWNER` | 仓库所有者 | `'huangsongping183'` |
 | `UPDATE_REPO` | 仓库名 | `'march7th-assistant-web-management-panel'` |
 | `UPDATE_BRANCH` | 仓库分支 | `'main'` |
-
-### 发版流程（维护者）
-1. 修改 `index.php` 顶部 `PANEL_VERSION`（如 `1.0` → `1.1`）
-2. `git add . && git commit -m "v1.1 更新说明" && git push`
-3. 在 Gitea/GitHub 仓库页面 → Releases → **Create a new release**：
-   - Tag 填 `v1.1`（与 PANEL_VERSION 对应）
-   - 标题写版本号，正文写更新日志
-4. 用户打开面板即可收到更新提醒
 
 > 未配置仓库或没有 Release 时，面板静默跳过检查，不影响使用。
 
