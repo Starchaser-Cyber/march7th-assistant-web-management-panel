@@ -2,9 +2,11 @@
 
 > 浏览器里管三月七，告别 SSH 命令行。
 
-![PHP](https://img.shields.io/badge/PHP-8.x-777BB4) ![单文件](https://img.shields.io/badge/单文件-仅一个PHP文件-ff69b4) ![License](https://img.shields.io/badge/License-MIT-green) ![更新](https://img.shields.io/badge/更新-自动检查-4BC0C0)
+![PHP](https://img.shields.io/badge/PHP-8.x-777BB4) ![单文件](https://img.shields.io/badge/单文件-仅一个PHP文件-ff69b4) ![License](https://img.shields.io/badge/License-GPLv3-blue) ![更新](https://img.shields.io/badge/更新-自动检查-4BC0C0)
 
 ## 项目介绍
+
+> ⚠️ **本面板为第三方开发的配套管理工具，非官方出品，与米哈游（HoYoverse）无关。**
 
 本面板是 [三月七小助手（March7thAssistant）](https://github.com/moesnow/March7thAssistant) 的配套网页管理工具。原项目是跑在电脑上的 GUI / 命令行程序，人不在电脑前就没法操作；本面板把它部署到服务器后，你用手机或电脑浏览器就能随时远程管理——启动日常任务、清体力、改配置、看日志，全程不需要命令行。
 
@@ -274,3 +276,7 @@ chmod 666 /home/march7thassistant/config.yaml
 ## 免责声明
 
 本项目仅供学习交流使用，请遵守游戏用户协议与相关法律法规，请勿将本项目用于违反游戏服务条款的用途。
+
+- 本面板为第三方开发的配套管理工具，**非官方出品**，与米哈游（HoYoverse）及《崩坏：星穹铁道》官方无关
+- 项目不包含任何游戏美术素材、立绘或官方资源
+- 本项目基于 **GNU GPL v3** 许可证发布，遵循原项目 [March7thAssistant](https://github.com/moesnow/March7thAssistant) 的开源协议
