@@ -1,0 +1,11 @@
+# 面板密码文件
+.panel_pass.php
+
+# 备份文件
+*.bak
+*.bak.*
+*.log
+
+# 系统文件
+.DS_Store
+Thumbs.db
