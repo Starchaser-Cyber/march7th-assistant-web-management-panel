@@ -18,7 +18,7 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.2');            // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.3');            // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -833,219 +833,347 @@ $cfgVals = $isAuth ? yaml_read_simple() : array();
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>March7th 管理面板</title>
+<title>M7A WebUI · March7th 管理面板</title>
 <style>
+/* ============================================================
+   M7A WebUI v1.3 · 三月七粉→浅蓝渐变 · 玻璃拟态侧边栏布局
+   仅外观改造，功能与后端逻辑零改动
+   ============================================================ */
 :root {
+  --bg: #fdf6fb;
+  --card: rgba(255,255,255,.72);
+  --card2: rgba(255,255,255,.55);
+  --card-solid: #ffffff;
+  --text: #581c87;
+  --muted: #a78ba3;
+  --primary: #ec4899;
+  --primary-2: #38bdf8;
+  --primary-soft: #fce7f3;
+  --green: #10b981;
+  --green-bg: #ecfdf5;
+  --red: #ef4444;
+  --red-bg: #fef2f2;
+  --orange: #f59e0b;
+  --orange-bg: #fffbeb;
+  --border: rgba(236,72,153,.16);
+  --shadow: 0 8px 32px rgba(236,72,153,.10);
+  --radius: 14px;
+  --grad: linear-gradient(135deg,#ec4899 0%,#7dd3fc 100%);
+  --grad-soft: linear-gradient(135deg,rgba(236,72,153,.13),rgba(125,211,252,.13));
+}
+html[data-theme="light"] {
   --bg: #f0f2f5;
   --card: #ffffff;
   --card2: #f8fafc;
+  --card-solid: #ffffff;
   --text: #1e293b;
   --muted: #64748b;
   --primary: #6366f1;
-  --primary-light: #a5b4fc;
-  --primary-bg: #eef2ff;
-  --green: #10b981;
+  --primary-2: #8b5cf6;
+  --primary-soft: #eef2ff;
   --green-bg: #ecfdf5;
-  --red: #ef4444;
   --red-bg: #fef2f2;
-  --orange: #f59e0b;
   --orange-bg: #fffbeb;
   --border: #e2e8f0;
-  --shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.04);
-  --radius: 12px;
+  --shadow: 0 1px 3px rgba(0,0,0,.08);
+  --grad: linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
+  --grad-soft: linear-gradient(135deg,rgba(99,102,241,.12),rgba(139,92,246,.12));
 }
-[data-theme="dark"] {
-  --bg: #0f172a;
-  --card: #1e293b;
-  --card2: #334155;
-  --text: #e2e8f0;
-  --muted: #94a3b8;
-  --primary: #818cf8;
-  --primary-light: #6366f1;
-  --primary-bg: #312e81;
+html[data-theme="dark"] {
+  --bg: #171022;
+  --card: rgba(38,24,48,.72);
+  --card2: rgba(51,33,63,.55);
+  --card-solid: #241632;
+  --text: #f3e8ff;
+  --muted: #a78bfa;
+  --primary: #f472b6;
+  --primary-2: #7dd3fc;
+  --primary-soft: #3b1d33;
   --green-bg: #064e3b;
   --red-bg: #7f1d1d;
   --orange-bg: #78350f;
-  --border: #475569;
-  --shadow: 0 1px 3px rgba(0,0,0,.3);
+  --border: rgba(244,114,182,.2);
+  --shadow: 0 8px 32px rgba(0,0,0,.35);
+  --grad: linear-gradient(135deg,#f472b6 0%,#7dd3fc 100%);
+  --grad-soft: linear-gradient(135deg,rgba(244,114,182,.16),rgba(125,211,252,.16));
 }
-/* ===== 第二皮肤：星铁粉紫（三月七主题） ===== */
-[data-theme="march7"] {
-  --bg: #fdf2f8;
-  --card: rgba(255,255,255,.72);
-  --card2: rgba(255,255,255,.55);
-  --text: #581c87;
-  --muted: #9d6b9d;
-  --primary: #ec4899;
-  --primary-light: #f9a8d4;
-  --primary-bg: #fce7f3;
-  --green: #10b981;
-  --green-bg: #ecfdf5;
-  --red: #ef4444;
-  --red-bg: #fef2f2;
-  --orange: #f59e0b;
-  --orange-bg: #fffbeb;
-  --border: rgba(236,72,153,.18);
-  --shadow: 0 8px 32px rgba(236,72,153,.12);
-}
-html[data-theme="march7"] body {
+/* 默认主题（march7 粉→浅蓝）背景 */
+body {
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  color:var(--text);
+  min-height:100vh;
   background:
-    radial-gradient(ellipse at 15% 0%, rgba(236,72,153,.10), transparent 50%),
-    radial-gradient(ellipse at 85% 100%, rgba(168,85,247,.14), transparent 50%),
-    linear-gradient(160deg, #fdf2f8 0%, #f5f3ff 50%, #fdf2f8 100%);
+    radial-gradient(ellipse at 12% 0%, rgba(236,72,153,.13), transparent 52%),
+    radial-gradient(ellipse at 88% 100%, rgba(125,211,252,.20), transparent 52%),
+    linear-gradient(160deg,#fdf2f8 0%,#eef7ff 52%,#fdf2f8 100%);
   background-attachment: fixed;
 }
-html[data-theme="march7"] .header { background:linear-gradient(135deg,#ec4899,#a855f7); box-shadow:0 2px 16px rgba(236,72,153,.35); }
-html[data-theme="march7"] .card { backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); }
-html[data-theme="march7"] .tab-btn.active { color:var(--primary); border-bottom-color:var(--primary); }
-* { margin:0; padding:0; box-sizing:border-box; }
-body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; background:var(--bg); color:var(--text); min-height:100vh; }
+html[data-theme="light"] body {
+  background:var(--bg);
+}
+html[data-theme="dark"] body {
+  background:
+    radial-gradient(ellipse at 12% 0%, rgba(236,72,153,.16), transparent 52%),
+    radial-gradient(ellipse at 88% 100%, rgba(56,189,248,.13), transparent 52%),
+    linear-gradient(160deg,#171022 0%,#0f1726 52%,#171022 100%);
+  background-attachment: fixed;
+}
 a { color:var(--primary); text-decoration:none; }
+* { margin:0; padding:0; box-sizing:border-box; }
 
-/* Header */
-.header { background:linear-gradient(135deg,var(--primary),#8b5cf6); color:#fff; padding:16px 24px; position:sticky; top:0; z-index:100; box-shadow:0 2px 8px rgba(99,102,241,.3); }
-.header-inner { max-width:1100px; margin:0 auto; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; }
-.header h1 { font-size:18px; font-weight:700; }
-.header .sub { font-size:12px; opacity:.8; margin-top:2px; }
-.header-actions { display:flex; align-items:center; gap:10px; }
-.status-badge { display:inline-flex; align-items:center; gap:5px; padding:4px 12px; border-radius:20px; font-size:12px; font-weight:600; background:rgba(255,255,255,.2); }
-.status-badge .dot { width:8px; height:8px; border-radius:50%; background:#fff; }
-.status-badge.running .dot { background:#4ade80; animation:pulse 2s infinite; }
-.status-badge.stopped .dot { background:#f87171; }
-@keyframes pulse { 0%,100%{opacity:1}50%{opacity:.4} }
-.theme-btn { background:rgba(255,255,255,.2); border:none; color:#fff; padding:6px 10px; border-radius:8px; cursor:pointer; font-size:14px; }
-.theme-btn:hover { background:rgba(255,255,255,.3); }
+/* 渐变文字 */
+.grad-text { background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent; }
 
-/* 更新提醒条 */
-.update-banner { position:sticky; top:64px; z-index:99; max-width:1100px; margin:12px auto 0; padding:0 24px; }
-.update-banner .update-inner { display:flex; align-items:center; gap:14px; background:linear-gradient(135deg,#ec4899,#a855f7); color:#fff; border-radius:12px; padding:12px 18px; box-shadow:0 4px 16px rgba(168,85,247,.3); flex-wrap:wrap; }
-.update-banner .update-icon { font-size:24px; }
-.update-banner .update-info { flex:1; min-width:200px; }
-.update-banner .update-title { font-weight:700; font-size:14px; }
-.update-banner .update-note { font-size:12px; opacity:.9; margin-top:3px; white-space:pre-wrap; max-height:72px; overflow-y:auto; }
-.update-banner .update-actions { display:flex; gap:8px; align-items:center; }
-.update-banner .btn.small { padding:6px 14px; font-size:12px; }
-.update-banner .btn.gray { background:rgba(255,255,255,.25); color:#fff; border:none; }
-.update-banner .btn.gray:hover { background:rgba(255,255,255,.35); }
-.logout-btn { background:rgba(255,255,255,.15); border:none; color:#fff; padding:6px 14px; border-radius:8px; cursor:pointer; font-size:13px; }
-.logout-btn:hover { background:rgba(255,255,255,.25); }
+/* ===== 布局 ===== */
+.layout { display:flex; min-height:100vh; }
+.content { flex:1; min-width:0; padding:24px 28px 56px; max-width:1180px; }
 
-/* Tabs */
-.tabs { max-width:1100px; margin:0 auto; display:flex; gap:0; padding:16px 24px 0; }
-.tab-btn { padding:10px 20px; border:none; background:transparent; color:var(--muted); font-size:14px; font-weight:500; cursor:pointer; border-bottom:2px solid transparent; transition:all .15s; }
-.tab-btn:hover { color:var(--text); }
-.tab-btn.active { color:var(--primary); border-bottom-color:var(--primary); }
+/* ===== 侧边栏 ===== */
+.sidebar {
+  width:16rem; flex-shrink:0;
+  background:rgba(255,255,255,.66);
+  backdrop-filter:blur(18px); -webkit-backdrop-filter:blur(18px);
+  border-right:1px solid var(--border);
+  display:flex; flex-direction:column;
+  position:sticky; top:0; height:100vh; z-index:200;
+}
+html[data-theme="dark"] .sidebar { background:rgba(30,18,40,.66); }
+.sidebar-logo { padding:22px 18px 16px; display:flex; align-items:center; gap:12px; border-bottom:1px solid var(--border); }
+.logo-badge {
+  width:42px; height:42px; border-radius:12px; flex-shrink:0;
+  background:var(--grad); color:#fff; font-weight:800; font-size:16px;
+  display:flex; align-items:center; justify-content:center;
+  box-shadow:0 6px 18px rgba(236,72,153,.35);
+}
+.logo-title { font-size:18px; font-weight:800; letter-spacing:.3px; }
+.logo-sub { font-size:11px; color:var(--muted); margin-top:2px; }
+.sidebar-nav { flex:1; padding:14px 12px; display:flex; flex-direction:column; gap:4px; overflow-y:auto; }
+.nav-item {
+  display:flex; align-items:center; gap:10px; width:100%; text-align:left;
+  padding:11px 14px; border:none; border-radius:10px; cursor:pointer;
+  background:transparent; color:var(--muted); font-size:14px; font-weight:500;
+  transition:all .15s; font-family:inherit;
+}
+.nav-item:hover { background:rgba(236,72,153,.07); color:var(--text); }
+.nav-item.active {
+  background:var(--grad-soft); color:var(--primary); font-weight:600;
+  box-shadow:inset 0 0 0 1px var(--border);
+}
+.nav-icon { font-size:16px; }
+.sidebar-bottom { padding:12px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:10px; }
+.sidebar-bottom-row { display:flex; gap:8px; align-items:center; }
+.sidebar-bottom-row .logout-btn { flex:1; justify-content:center; }
 
-/* Main */
-.main { max-width:1100px; margin:0 auto; padding:20px 24px 40px; }
-.tab-panel { display:none; }
-.tab-panel.active { display:block; }
+/* 图标按钮 */
+.icon-btn {
+  width:38px; height:38px; border-radius:10px; border:1px solid var(--border);
+  background:var(--card2); color:var(--text); font-size:16px; cursor:pointer;
+  display:inline-flex; align-items:center; justify-content:center; transition:all .15s;
+}
+.icon-btn:hover { border-color:var(--primary); background:var(--primary-soft); }
 
-/* Card */
-.card { background:var(--card); border-radius:var(--radius); padding:20px 24px; margin-bottom:16px; box-shadow:var(--shadow); border:1px solid var(--border); }
-.card h2 { font-size:15px; font-weight:600; margin-bottom:14px; display:flex; align-items:center; gap:8px; }
+/* 侧边栏遮罩 & 移动端顶栏 */
+.sidebar-overlay { position:fixed; inset:0; background:rgba(30,12,40,.42); backdrop-filter:blur(2px); z-index:190; display:none; }
+.sidebar-overlay.show { display:block; }
+.mobile-topbar {
+  display:none; align-items:center; gap:10px; margin-bottom:16px;
+  background:var(--card); backdrop-filter:blur(14px); border:1px solid var(--border);
+  border-radius:12px; padding:10px 14px; box-shadow:var(--shadow);
+}
+
+/* ===== 状态徽章 ===== */
+.status-badge {
+  display:inline-flex; align-items:center; gap:6px; padding:6px 14px;
+  border-radius:20px; font-size:12px; font-weight:600;
+  background:rgba(236,72,153,.10); color:var(--primary);
+  border:1px solid var(--border);
+}
+.status-badge .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); }
+.status-badge.running .dot { background:#4ade80; animation:pulse 2s infinite; box-shadow:0 0 0 3px rgba(74,222,128,.18); }
+.status-badge.stopped .dot { background:#f87171; box-shadow:0 0 0 3px rgba(248,113,113,.15); }
+@keyframes pulse { 0%,100%{opacity:1}50%{opacity:.35} }
+
+/* ===== 页面 ===== */
+.page { display:none; }
+.page.active { display:block; animation:fadeIn .25s ease; }
+@keyframes fadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
+.page-head { margin-bottom:18px; }
+.page-title { font-size:22px; font-weight:800; display:flex; align-items:center; gap:8px; }
+.page-title .pt-icon { font-size:22px; }
+.page-desc { font-size:13px; color:var(--muted); margin-top:4px; }
+
+/* ===== 卡片 ===== */
+.card {
+  background:var(--card); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px);
+  border-radius:var(--radius); padding:20px 24px; margin-bottom:16px;
+  border:1px solid var(--border); box-shadow:var(--shadow);
+}
+html[data-theme="light"] .card { background:var(--card); }
+.card h2 { font-size:15px; font-weight:700; margin-bottom:14px; display:flex; align-items:center; gap:8px; }
 .card h2 .icon { font-size:18px; }
 
-/* Messages */
-.msg { padding:12px 16px; border-radius:10px; margin-bottom:16px; font-size:14px; display:flex; align-items:center; gap:8px; }
+/* ===== 消息 ===== */
+.msg { padding:12px 16px; border-radius:12px; margin-bottom:16px; font-size:14px; display:flex; align-items:center; gap:8px; }
 .msg.ok { background:var(--green-bg); color:var(--green); border:1px solid var(--green); }
 .msg.err { background:var(--red-bg); color:var(--red); border:1px solid var(--red); }
 
-/* Buttons */
-.btn { display:inline-flex; align-items:center; gap:6px; padding:10px 20px; border:none; border-radius:10px; font-size:14px; font-weight:500; cursor:pointer; transition:all .15s; color:#fff; }
-.btn:hover { opacity:.9; transform:translateY(-1px); }
-.btn.primary { background:var(--primary); }
+/* ===== 按钮 ===== */
+.btn { display:inline-flex; align-items:center; gap:6px; padding:10px 20px; border:none; border-radius:10px; font-size:14px; font-weight:600; cursor:pointer; transition:all .15s; color:#fff; }
+.btn:hover { opacity:.92; transform:translateY(-1px); }
+.btn:active { transform:translateY(0); }
+.btn.primary { background:var(--grad); box-shadow:0 4px 14px rgba(236,72,153,.3); }
 .btn.green { background:var(--green); }
 .btn.orange { background:var(--orange); }
 .btn.red { background:var(--red); }
-.btn.gray { background:#64748b; }
-.btn.small { padding:7px 14px; font-size:13px; }
+.btn.gray { background:#94a3b8; }
+.btn.small { padding:7px 14px; font-size:12.5px; }
 .btn-group { display:flex; flex-wrap:wrap; gap:8px; }
+.logout-btn { display:inline-flex; align-items:center; gap:6px; padding:9px 16px; border:none; border-radius:10px; cursor:pointer; font-size:13px; font-weight:600; color:#fff; background:var(--grad); }
 
-/* Code box */
-.codebox { background:var(--card2); border:1px solid var(--border); border-radius:8px; padding:14px; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12.5px; line-height:1.7; white-space:pre-wrap; word-break:break-all; max-height:440px; overflow:auto; color:var(--text); }
+/* ===== 代码框 ===== */
+.codebox {
+  background:var(--card2); border:1px solid var(--border); border-radius:12px; padding:14px;
+  font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12.5px; line-height:1.7;
+  white-space:pre-wrap; word-break:break-all; max-height:440px; overflow:auto; color:var(--text);
+}
 
-/* Task cards */
-.task-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:10px; }
-.task-card { background:var(--card2); border:1px solid var(--border); border-radius:10px; padding:14px; text-align:center; transition:all .15s; }
-.task-card:hover { border-color:var(--primary); box-shadow:0 2px 8px rgba(99,102,241,.15); }
-.task-card .icon { font-size:28px; margin-bottom:6px; }
-.task-card .label { font-size:14px; font-weight:600; margin-bottom:4px; }
+/* ===== 任务卡片 ===== */
+.task-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:12px; }
+.task-card {
+  background:var(--card2); border:1px solid var(--border); border-radius:12px; padding:16px;
+  text-align:center; transition:all .18s; backdrop-filter:blur(8px);
+}
+.task-card:hover { border-color:var(--primary); box-shadow:0 8px 24px rgba(236,72,153,.15); transform:translateY(-2px); }
+.task-card .icon { font-size:30px; margin-bottom:8px; }
+.task-card .label { font-size:14px; font-weight:700; margin-bottom:4px; }
 .task-card .desc { font-size:11px; color:var(--muted); line-height:1.4; }
 .task-card form { margin-top:10px; }
 .task-card .btn { width:100%; justify-content:center; }
 
-/* Config form */
+/* ===== 配置表单 ===== */
 .cfg-group { margin-bottom:20px; }
-.cfg-group h3 { font-size:14px; font-weight:600; margin-bottom:10px; padding-bottom:6px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:6px; }
-.cfg-row { display:flex; align-items:center; justify-content:space-between; padding:8px 0; gap:12px; }
+.cfg-group h3 { font-size:14px; font-weight:700; margin-bottom:10px; padding-bottom:6px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:6px; }
+.cfg-row { display:flex; align-items:center; justify-content:space-between; padding:9px 0; gap:12px; }
 .cfg-row + .cfg-row { border-top:1px solid var(--border); }
 .cfg-label { font-size:13px; color:var(--text); flex:1; min-width:0; }
 .cfg-input { flex:0 0 auto; }
 /* Switch */
 .switch { position:relative; display:inline-block; width:44px; height:24px; }
 .switch input { opacity:0; width:0; height:0; }
-.switch .slider { position:absolute; inset:0; background:#cbd5e1; border-radius:24px; transition:.2s; cursor:pointer; }
-.switch .slider:before { content:''; position:absolute; width:18px; height:18px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:.2s; }
-.switch input:checked + .slider { background:var(--primary); }
+.switch .slider { position:absolute; inset:0; background:#d6c3d0; border-radius:24px; transition:.2s; cursor:pointer; }
+.switch .slider:before { content:''; position:absolute; width:18px; height:18px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:.2s; box-shadow:0 1px 3px rgba(0,0,0,.2); }
+.switch input:checked + .slider { background:var(--grad); }
 .switch input:checked + .slider:before { transform:translateX(20px); }
 /* Select / Input */
-.cfg-select, .cfg-input-text, .cfg-input-num { padding:7px 12px; border:1px solid var(--border); border-radius:8px; font-size:13px; background:var(--card); color:var(--text); min-width:160px; }
+.cfg-select, .cfg-input-text, .cfg-input-num {
+  padding:7px 12px; border:1px solid var(--border); border-radius:9px; font-size:13px;
+  background:var(--card-solid); color:var(--text); min-width:160px; font-family:inherit;
+}
 .cfg-input-text { min-width:200px; }
 .cfg-input-num { min-width:100px; }
-.cfg-select:focus, .cfg-input-text:focus, .cfg-input-num:focus { outline:none; border-color:var(--primary); }
+.cfg-select:focus, .cfg-input-text:focus, .cfg-input-num:focus { outline:none; border-color:var(--primary); box-shadow:0 0 0 3px rgba(236,72,153,.12); }
 .cfg-pass { min-width:200px; }
 .cfg-tip { display:block; font-size:11px; color:var(--muted); margin-top:2px; font-weight:400; line-height:1.4; }
-.cfg-textarea { width:100%; min-width:260px; padding:7px 12px; border:1px solid var(--border); border-radius:8px; font-size:12px; background:var(--card); color:var(--text); font-family:Consolas,Monaco,monospace; resize:vertical; box-sizing:border-box; }
+.cfg-textarea {
+  width:100%; min-width:260px; padding:7px 12px; border:1px solid var(--border); border-radius:9px;
+  font-size:12px; background:var(--card-solid); color:var(--text);
+  font-family:Consolas,Monaco,monospace; resize:vertical; box-sizing:border-box;
+}
 .cfg-textarea:focus { outline:none; border-color:var(--primary); }
 
-/* Textarea */
-.yaml-editor { width:100%; min-height:500px; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12.5px; line-height:1.6; padding:14px; border:1px solid var(--border); border-radius:8px; background:var(--card2); color:var(--text); resize:vertical; tab-size:2; }
-.yaml-editor:focus { outline:none; border-color:var(--primary); }
+/* YAML 编辑器 */
+.yaml-editor {
+  width:100%; min-height:500px; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12.5px; line-height:1.6;
+  padding:14px; border:1px solid var(--border); border-radius:12px; background:var(--card2);
+  color:var(--text); resize:vertical; tab-size:2;
+}
+.yaml-editor:focus { outline:none; border-color:var(--primary); box-shadow:0 0 0 3px rgba(236,72,153,.12); }
 
-/* Log */
+/* 配置模式切换 */
+.cfg-tabs { display:flex; gap:0; margin-bottom:16px; border-bottom:1px solid var(--border); }
+.cfg-tab { padding:8px 16px; border:none; background:transparent; color:var(--muted); font-size:13px; cursor:pointer; border-bottom:2px solid transparent; }
+.cfg-tab.active { color:var(--primary); border-bottom-color:var(--primary); font-weight:600; }
+.cfg-panel { display:none; }
+.cfg-panel.active { display:block; }
+
+/* ===== 日志 ===== */
 .log-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px; }
 .auto-refresh { display:flex; align-items:center; gap:6px; font-size:13px; color:var(--muted); }
 .auto-refresh input { accent-color:var(--primary); }
 .log-filter { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px; }
-.log-filter input[type=text] { flex:1; min-width:160px; padding:7px 12px; border:1px solid var(--border); border-radius:8px; font-size:13px; background:var(--card); color:var(--text); }
+.log-filter input[type=text] {
+  flex:1; min-width:160px; padding:7px 12px; border:1px solid var(--border); border-radius:9px;
+  font-size:13px; background:var(--card-solid); color:var(--text);
+}
 .log-filter input[type=text]:focus { outline:none; border-color:var(--primary); }
-.log-filter select { padding:7px 10px; border:1px solid var(--border); border-radius:8px; font-size:13px; background:var(--card); color:var(--text); }
+.log-filter select {
+  padding:7px 10px; border:1px solid var(--border); border-radius:9px; font-size:13px;
+  background:var(--card-solid); color:var(--text);
+}
 .log-count { font-size:12px; color:var(--muted); }
-.hl { background:#fde68a; color:#92400e; border-radius:3px; padding:0 2px; }
+.hl { background:#fecdd3; color:#9f1239; border-radius:3px; padding:0 2px; }
 
-/* Auth */
+/* ===== 登录页 ===== */
 .auth-wrap { min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; }
-.auth-card { background:var(--card); border-radius:16px; padding:36px 32px; max-width:400px; width:100%; box-shadow:var(--shadow); text-align:center; }
-.auth-card h1 { font-size:22px; margin-bottom:4px; }
+.auth-card {
+  background:var(--card); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px);
+  border-radius:20px; padding:40px 34px; max-width:400px; width:100%;
+  border:1px solid var(--border); box-shadow:0 20px 60px rgba(236,72,153,.18); text-align:center;
+}
+.auth-logo {
+  width:64px; height:64px; border-radius:18px; margin:0 auto 14px;
+  background:var(--grad); color:#fff; font-size:24px; font-weight:800;
+  display:flex; align-items:center; justify-content:center;
+  box-shadow:0 10px 28px rgba(236,72,153,.4);
+}
+.auth-card h1 { font-size:22px; margin-bottom:4px; font-weight:800; }
 .auth-card .sub { color:var(--muted); font-size:13px; margin-bottom:24px; }
-.auth-card input[type=password] { width:100%; padding:12px 14px; border:1px solid var(--border); border-radius:10px; font-size:15px; margin-bottom:12px; background:var(--card2); color:var(--text); }
-.auth-card input[type=password]:focus { outline:none; border-color:var(--primary); }
+.auth-card input[type=password] {
+  width:100%; padding:12px 14px; border:1px solid var(--border); border-radius:11px;
+  font-size:15px; margin-bottom:12px; background:var(--card-solid); color:var(--text);
+}
+.auth-card input[type=password]:focus { outline:none; border-color:var(--primary); box-shadow:0 0 0 3px rgba(236,72,153,.14); }
 .auth-card .btn { width:100%; justify-content:center; }
 .tip { font-size:12px; color:var(--muted); line-height:1.6; margin-top:10px; }
 
-/* Overview info */
-.info-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:10px; }
-.info-item { background:var(--card2); border-radius:10px; padding:14px; border:1px solid var(--border); }
+/* ===== 信息网格 ===== */
+.info-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px; }
+.info-item {
+  background:var(--card2); border-radius:12px; padding:14px; border:1px solid var(--border);
+  backdrop-filter:blur(8px);
+}
 .info-item .label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }
-.info-item .value { font-size:16px; font-weight:600; }
+.info-item .value { font-size:16px; font-weight:700; }
 
-/* Responsive */
-@media (max-width:640px) {
-  .header { padding:12px 16px; }
-  .tabs { padding:12px 16px 0; overflow-x:auto; }
-  .main { padding:16px; }
+/* ===== 更新提醒 ===== */
+.update-banner { margin-bottom:16px; }
+.update-inner {
+  display:flex; align-items:center; gap:14px; background:var(--grad); color:#fff;
+  border-radius:14px; padding:14px 18px; box-shadow:0 8px 24px rgba(236,72,153,.32); flex-wrap:wrap;
+}
+.update-icon { font-size:24px; }
+.update-info { flex:1; min-width:200px; }
+.update-title { font-weight:700; font-size:14px; }
+.update-note { font-size:12px; opacity:.92; margin-top:3px; white-space:pre-wrap; max-height:72px; overflow-y:auto; }
+.update-actions { display:flex; gap:8px; align-items:center; }
+.update-banner .btn.small { padding:6px 14px; font-size:12px; }
+.update-banner .btn.gray { background:rgba(255,255,255,.28); color:#fff; border:none; }
+.update-banner .btn.gray:hover { background:rgba(255,255,255,.4); }
+
+/* ===== 响应式 ===== */
+@media (max-width:899px) {
+  .sidebar { position:fixed; left:0; top:0; bottom:0; transform:translateX(-100%); transition:transform .3s ease; box-shadow:0 0 40px rgba(0,0,0,.2); }
+  .sidebar.open { transform:translateX(0); }
+  .mobile-topbar { display:flex; }
+  .content { padding:16px; }
   .task-grid { grid-template-columns:1fr 1fr; }
   .cfg-row { flex-direction:column; align-items:flex-start; }
   .cfg-input { align-self:flex-end; }
 }
-
-/* Config mode tabs */
-.cfg-tabs { display:flex; gap:0; margin-bottom:16px; border-bottom:1px solid var(--border); }
-.cfg-tab { padding:8px 16px; border:none; background:transparent; color:var(--muted); font-size:13px; cursor:pointer; border-bottom:2px solid transparent; }
-.cfg-tab.active { color:var(--primary); border-bottom-color:var(--primary); font-weight:500; }
-.cfg-panel { display:none; }
-.cfg-panel.active { display:block; }
+@media (min-width:900px) {
+  .sidebar { transform:none; }
+  .sidebar-overlay { display:none !important; }
+}
 </style>
 </head>
 <body>
@@ -1054,8 +1182,8 @@ a { color:var(--primary); text-decoration:none; }
 <!-- ===== 登录页 ===== -->
 <div class="auth-wrap">
   <div class="auth-card">
-    <div style="font-size:48px;margin-bottom:8px;">🌟</div>
-    <h1>March7th 管理面板</h1>
+    <div class="auth-logo">M7A</div>
+    <h1 class="grad-text">March7th 管理面板</h1>
     <p class="sub"><?php echo $needSetup ? '首次使用，请设置访问密码' : '请输入访问密码'; ?></p>
     <?php if ($err): ?><div class="msg err"><?php echo h($err); ?></div><?php endif; ?>
     <?php if ($needSetup): ?>
@@ -1077,268 +1205,298 @@ a { color:var(--primary); text-decoration:none; }
 </div>
 
 <?php else: ?>
-<!-- ===== 主界面 ===== -->
+<!-- ===== 主界面：左侧边栏 + 内容区 ===== -->
+<div class="layout">
 
-<!-- Header -->
-<div class="header">
-  <div class="header-inner">
-    <div>
-      <h1>🌟 March7th 管理面板</h1>
-      <div class="sub">容器 <?php echo h(CONTAINER); ?> · <?php echo h(PROJECT_DIR); ?></div>
-    </div>
-    <div class="header-actions">
-      <span class="status-badge" id="statusBadge"><span class="dot"></span><span id="statusText">检测中…</span></span>
-      <button class="theme-btn" onclick="toggleTheme()" title="切换主题" id="themeBtn">🌙</button>
-      <form method="post" style="display:inline;"><?php echo csrf_field(); ?><input type="hidden" name="action" value="logout"><button type="submit" class="logout-btn">退出</button></form>
-    </div>
-  </div>
-</div>
-
-<!-- 自动更新提醒 -->
-<div class="update-banner" id="updateBanner" style="display:none;">
-  <div class="update-inner">
-    <div class="update-icon">🆕</div>
-    <div class="update-info">
-      <div class="update-title">发现新版本 v<span id="updLatest"></span>（当前 v<span id="updCurrent"></span>）</div>
-      <div class="update-note" id="updNote"></div>
-    </div>
-    <div class="update-actions">
-      <button class="btn green small" id="updBtn" onclick="doUpdate()">一键更新</button>
-      <button class="btn gray small" onclick="hideUpdate()">稍后</button>
-    </div>
-  </div>
-</div>
-
-<!-- Tabs -->
-<div class="tabs">
-  <button class="tab-btn active" data-tab="overview" onclick="switchTab('overview')">📊 概览</button>
-  <button class="tab-btn" data-tab="tasks" onclick="switchTab('tasks')">🚀 任务</button>
-  <button class="tab-btn" data-tab="config" onclick="switchTab('config')">⚙️ 配置</button>
-  <button class="tab-btn" data-tab="log" onclick="switchTab('log')">📝 日志</button>
-</div>
-
-<!-- Main -->
-<div class="main">
-
-<?php if ($msg): ?><div class="msg ok">✅ <?php echo h($msg); ?></div><?php endif; ?>
-<?php if ($err): ?><div class="msg err">❌ <?php echo h($err); ?></div><?php endif; ?>
-
-<!-- ===== 概览 ===== -->
-<div class="tab-panel active" id="panel-overview">
-  <div class="card">
-    <h2><span class="icon">📦</span> 容器状态 <button class="btn small gray" onclick="refreshStatus()" style="margin-left:auto;">刷新</button></h2>
-    <div class="codebox" id="statusBox"><?php $st = container_status(); echo $st === '' ? '(无法获取，请检查 www 用户 docker 权限)' : h($st); ?></div>
-  </div>
-
-  <div class="card">
-    <h2><span class="icon">⚡</span> 快捷操作</h2>
-    <div class="btn-group">
-      <?php foreach ($TASKS as $key => $t): ?>
-      <form method="post" style="display:inline;"><?php echo csrf_field(); ?><input type="hidden" name="action" value="<?php echo h($key); ?>"><button type="submit" class="btn primary"><?php echo h($t['icon'] . ' ' . $t['label']); ?></button></form>
-      <?php endforeach; ?>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2><span class="icon">📊</span> 基本信息</h2>
-    <div class="info-grid">
-      <div class="info-item"><div class="label">项目目录</div><div class="value" style="font-size:13px;"><?php echo h(PROJECT_DIR); ?></div></div>
-      <div class="info-item"><div class="label">容器名</div><div class="value"><?php echo h(CONTAINER); ?></div></div>
-      <div class="info-item"><div class="label">Config</div><div class="value" style="font-size:13px;"><?php echo is_file(CONFIG_PATH) ? '✅ 存在' : '❌ 不存在'; ?></div></div>
-      <div class="info-item"><div class="label">最近日志</div><div class="value" style="font-size:13px;"><?php $lp = latest_log_path(); echo $lp ? h(basename($lp)) : '暂无'; ?></div></div>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2><span class="icon">💾</span> 配置备份</h2>
-    <div class="btn-group">
-      <a href="?download=config" class="btn primary">⬇️ 下载备份</a>
-    </div>
-    <form method="post" enctype="multipart/form-data" style="margin-top:10px;display:flex;gap:8px;align-items:center;">
-      <?php echo csrf_field(); ?>
-      <input type="hidden" name="action" value="restore_config">
-      <input type="file" name="cfg_file" accept=".yaml,.yml" style="flex:1;font-size:13px;">
-      <button type="submit" class="btn orange small" onclick="return confirm('恢复配置会用上传文件覆盖当前 config.yaml，确定？');">⬆️ 恢复配置</button>
-    </form>
-    <p class="tip" style="margin:10px 0 0;">下载备份可把配置导出到本地保存；恢复前会自动备份当前文件，恢复后需重启容器生效。</p>
-  </div>
-</div>
-
-
-  <div class="card">
-    <h2><span class="icon">🔗</span> 更新源 <button class="btn small gray" onclick="testUpdateSource()" style="margin-left:auto;">测试连接</button></h2>
-    <div class="info-grid">
-      <div class="info-item"><div class="label">更新源类型</div><div class="value"><?php echo h(strtoupper(UPDATE_TYPE)); ?></div></div>
-      <div class="info-item"><div class="label">当前版本</div><div class="value">v<?php echo h(PANEL_VERSION); ?></div></div>
-      <div class="info-item"><div class="label">仓库</div><div class="value" style="font-size:13px;"><?php echo h(UPDATE_OWNER . '/' . UPDATE_REPO); ?></div></div>
-      <div class="info-item"><div class="label">API 连通</div><div class="value" id="srcApiStatus">未测试</div></div>
-      <div class="info-item"><div class="label">文件下载</div><div class="value" id="srcRawStatus">未测试</div></div>
-      <div class="info-item"><div class="label">镜像加速</div><div class="value" id="srcMirrorStatus">未测试</div></div>
-    </div>
-  </div>
-
-<!-- ===== 任务 ===== -->
-<div class="tab-panel" id="panel-tasks">
-  <div class="card">
-    <h2><span class="icon">🚀</span> 执行任务</h2>
-    <p class="tip" style="margin-top:0;margin-bottom:14px;">任务在容器内后台执行，启动后可切到「日志」页查看进度。</p>
-    <div class="task-grid">
-      <?php foreach ($TASKS as $key => $t): ?>
-      <div class="task-card">
-        <div class="icon"><?php echo h($t['icon']); ?></div>
-        <div class="label"><?php echo h($t['label']); ?></div>
-        <div class="desc"><?php echo h($t['desc']); ?></div>
-        <form method="post"><?php echo csrf_field(); ?><input type="hidden" name="action" value="<?php echo h($key); ?>"><button type="submit" class="btn primary small">执行</button></form>
+  <!-- 侧边栏 -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-badge">M7A</div>
+      <div>
+        <div class="logo-title grad-text">M7A WebUI</div>
+        <div class="logo-sub">管理面板 v<?php echo h(PANEL_VERSION); ?></div>
       </div>
-      <?php endforeach; ?>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2><span class="icon">🔧</span> 容器操作</h2>
-    <div class="btn-group">
-      <?php foreach ($OPS as $key => $op): ?>
-      <form method="post" style="display:inline;" onsubmit="return confirm('<?php echo h($op['confirm']); ?>');"><?php echo csrf_field(); ?><input type="hidden" name="action" value="<?php echo h($key); ?>"><button type="submit" class="btn <?php echo $key === 'restart' ? 'orange' : 'red'; ?>"><?php echo h($op['icon'] . ' ' . $op['label']); ?></button></form>
-      <?php endforeach; ?>
-    </div>
-  </div>
-</div>
-
-<!-- ===== 配置 ===== -->
-<div class="tab-panel" id="panel-config">
-  <div class="card">
-    <h2><span class="icon">⚙️</span> 配置管理</h2>
-
-    <div class="cfg-tabs">
-      <button class="cfg-tab active" onclick="switchCfgTab('form')">📋 图形化编辑</button>
-      <button class="cfg-tab" onclick="switchCfgTab('text')">📝 文本编辑</button>
     </div>
 
-    <!-- 图形化表单 -->
-    <div class="cfg-panel active" id="cfgPanel-form">
-      <form method="post" id="configForm">
-        <?php echo csrf_field(); ?>
-        <input type="hidden" name="action" value="save_config_form">
+    <nav class="sidebar-nav">
+      <button class="nav-item active" data-tab="overview" onclick="switchTab('overview')"><span class="nav-icon">📊</span>概览</button>
+      <button class="nav-item" data-tab="tasks" onclick="switchTab('tasks')"><span class="nav-icon">🚀</span>任务</button>
+      <button class="nav-item" data-tab="config" onclick="switchTab('config')"><span class="nav-icon">⚙️</span>配置</button>
+      <button class="nav-item" data-tab="log" onclick="switchTab('log')"><span class="nav-icon">📝</span>日志</button>
+    </nav>
 
-        <?php foreach ($CONFIG_GROUPS as $gKey => $g): ?>
-        <div class="cfg-group">
-          <h3><?php echo h($g['icon'] . ' ' . $g['title']); ?></h3>
-          <?php foreach ($g['fields'] as $fKey => $f):
-              $curVal = $cfgVals[$fKey] ?? '';
-              $curValClean = trim($curVal, "\"'");
-          ?>
-          <div class="cfg-row">
-            <span class="cfg-label"><?php echo h($f['label']); ?><?php if (!empty($f['tip'])): ?><span class="cfg-tip"><?php echo h($f['tip']); ?></span><?php endif; ?></span>
-            <div class="cfg-input">
-              <?php if ($f['type'] === 'bool'): ?>
-              <label class="switch">
-                <input type="checkbox" name="cfg_<?php echo h($fKey); ?>" value="1" <?php echo ($curVal === 'true') ? 'checked' : ''; ?>>
-                <span class="slider"></span>
-              </label>
+    <div class="sidebar-bottom">
+      <span class="status-badge" id="statusBadge" style="justify-content:center;"><span class="dot"></span><span class="status-text">检测中…</span></span>
+      <div class="sidebar-bottom-row">
+        <button class="icon-btn" id="themeBtn" onclick="toggleTheme()" title="切换主题">🌙</button>
+        <form method="post" style="display:inline;flex:1;"><?php echo csrf_field(); ?><input type="hidden" name="action" value="logout"><button type="submit" class="logout-btn">退出</button></form>
+      </div>
+    </div>
+  </aside>
+  <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
 
-              <?php elseif ($f['type'] === 'select'): ?>
-              <select name="cfg_<?php echo h($fKey); ?>" class="cfg-select">
-                <?php foreach ($f['options'] as $ov => $ol): ?>
-                <option value="<?php echo h($ov); ?>" <?php echo ($curValClean === $ov) ? 'selected' : ''; ?>><?php echo h($ol); ?></option>
-                <?php endforeach; ?>
-              </select>
+  <!-- 内容区 -->
+  <div class="content">
 
-              <?php elseif ($f['type'] === 'int'): ?>
-              <input type="number" name="cfg_<?php echo h($fKey); ?>" value="<?php echo h($curValClean); ?>" class="cfg-input-num">
+    <!-- 移动端顶栏 -->
+    <div class="mobile-topbar">
+      <button class="icon-btn" onclick="openSidebar()">☰</button>
+      <span class="grad-text" style="font-weight:800;font-size:16px;">M7A WebUI</span>
+      <span class="status-badge" id="statusBadgeM" style="margin-left:auto;"><span class="dot"></span><span class="status-text">检测中…</span></span>
+    </div>
 
-              <?php elseif ($f['type'] === 'password'): ?>
-              <input type="password" name="cfg_<?php echo h($fKey); ?>" placeholder="留空则不修改" class="cfg-input-text cfg-pass" autocomplete="off">
+    <!-- 自动更新提醒 -->
+    <div class="update-banner" id="updateBanner" style="display:none;">
+      <div class="update-inner">
+        <div class="update-icon">🆕</div>
+        <div class="update-info">
+          <div class="update-title">发现新版本 v<span id="updLatest"></span>（当前 v<span id="updCurrent"></span>）</div>
+          <div class="update-note" id="updNote"></div>
+        </div>
+        <div class="update-actions">
+          <button class="btn small" id="updBtn" onclick="doUpdate()">一键更新</button>
+          <button class="btn gray small" onclick="hideUpdate()">稍后</button>
+        </div>
+      </div>
+    </div>
 
-              <?php elseif ($f['type'] === 'textarea'): ?>
-              <textarea name="cfg_<?php echo h($fKey); ?>" class="cfg-textarea" rows="3" placeholder="<?php echo h($f['placeholder'] ?? ''); ?>"><?php echo h($curValClean); ?></textarea>
+    <?php if ($msg): ?><div class="msg ok">✅ <?php echo h($msg); ?></div><?php endif; ?>
+    <?php if ($err): ?><div class="msg err">❌ <?php echo h($err); ?></div><?php endif; ?>
 
-              <?php else: ?>
-              <input type="text" name="cfg_<?php echo h($fKey); ?>" value="<?php echo h($curValClean); ?>" class="cfg-input-text" placeholder="<?php echo h($f['placeholder'] ?? ''); ?>">
-              <?php endif; ?>
-            </div>
+    <!-- ===== 概览 ===== -->
+    <div class="page active" id="panel-overview">
+      <div class="page-head">
+        <div class="page-title"><span class="pt-icon">📊</span>概览</div>
+        <div class="page-desc">容器状态、快捷操作与基本信息</div>
+      </div>
+
+      <div class="card">
+        <h2><span class="icon">📦</span> 容器状态 <button class="btn small gray" onclick="refreshStatus()" style="margin-left:auto;">刷新</button></h2>
+        <div class="codebox" id="statusBox"><?php $st = container_status(); echo $st === '' ? '(无法获取，请检查 www 用户 docker 权限)' : h($st); ?></div>
+      </div>
+
+      <div class="card">
+        <h2><span class="icon">⚡</span> 快捷操作</h2>
+        <div class="btn-group">
+          <?php foreach ($TASKS as $key => $t): ?>
+          <form method="post" style="display:inline;"><?php echo csrf_field(); ?><input type="hidden" name="action" value="<?php echo h($key); ?>"><button type="submit" class="btn primary"><?php echo h($t['icon'] . ' ' . $t['label']); ?></button></form>
+          <?php endforeach; ?>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2><span class="icon">📌</span> 基本信息</h2>
+        <div class="info-grid">
+          <div class="info-item"><div class="label">项目目录</div><div class="value" style="font-size:13px;"><?php echo h(PROJECT_DIR); ?></div></div>
+          <div class="info-item"><div class="label">容器名</div><div class="value"><?php echo h(CONTAINER); ?></div></div>
+          <div class="info-item"><div class="label">Config</div><div class="value" style="font-size:13px;"><?php echo is_file(CONFIG_PATH) ? '✅ 存在' : '❌ 不存在'; ?></div></div>
+          <div class="info-item"><div class="label">最近日志</div><div class="value" style="font-size:13px;"><?php $lp = latest_log_path(); echo $lp ? h(basename($lp)) : '暂无'; ?></div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2><span class="icon">🔗</span> 更新源 <button class="btn small gray" onclick="testUpdateSource()" style="margin-left:auto;">测试连接</button></h2>
+        <div class="info-grid">
+          <div class="info-item"><div class="label">更新源类型</div><div class="value"><?php echo h(strtoupper(UPDATE_TYPE)); ?></div></div>
+          <div class="info-item"><div class="label">当前版本</div><div class="value">v<?php echo h(PANEL_VERSION); ?></div></div>
+          <div class="info-item"><div class="label">仓库</div><div class="value" style="font-size:13px;"><?php echo h(UPDATE_OWNER . '/' . UPDATE_REPO); ?></div></div>
+          <div class="info-item"><div class="label">API 连通</div><div class="value" id="srcApiStatus">未测试</div></div>
+          <div class="info-item"><div class="label">文件下载</div><div class="value" id="srcRawStatus">未测试</div></div>
+          <div class="info-item"><div class="label">镜像加速</div><div class="value" id="srcMirrorStatus">未测试</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2><span class="icon">💾</span> 配置备份</h2>
+        <div class="btn-group">
+          <a href="?download=config" class="btn primary">⬇️ 下载备份</a>
+        </div>
+        <form method="post" enctype="multipart/form-data" style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <?php echo csrf_field(); ?>
+          <input type="hidden" name="action" value="restore_config">
+          <input type="file" name="cfg_file" accept=".yaml,.yml" style="flex:1;font-size:13px;min-width:200px;">
+          <button type="submit" class="btn orange small" onclick="return confirm('恢复配置会用上传文件覆盖当前 config.yaml，确定？');">⬆️ 恢复配置</button>
+        </form>
+        <p class="tip" style="margin:10px 0 0;">下载备份可把配置导出到本地保存；恢复前会自动备份当前文件，恢复后需重启容器生效。</p>
+      </div>
+    </div>
+
+    <!-- ===== 任务 ===== -->
+    <div class="page" id="panel-tasks">
+      <div class="page-head">
+        <div class="page-title"><span class="pt-icon">🚀</span>任务</div>
+        <div class="page-desc">在容器内后台执行，启动后可切到「日志」页查看进度</div>
+      </div>
+
+      <div class="card">
+        <h2><span class="icon">🎮</span> 执行任务</h2>
+        <div class="task-grid">
+          <?php foreach ($TASKS as $key => $t): ?>
+          <div class="task-card">
+            <div class="icon"><?php echo h($t['icon']); ?></div>
+            <div class="label"><?php echo h($t['label']); ?></div>
+            <div class="desc"><?php echo h($t['desc']); ?></div>
+            <form method="post"><?php echo csrf_field(); ?><input type="hidden" name="action" value="<?php echo h($key); ?>"><button type="submit" class="btn primary small">执行</button></form>
           </div>
           <?php endforeach; ?>
         </div>
-        <?php endforeach; ?>
+      </div>
 
-        <div class="btn-group" style="margin-top:16px;">
-          <button type="submit" class="btn green">💾 保存配置</button>
-          <button type="button" class="btn orange" onclick="restartAfterSave()">💾 保存并重启容器</button>
+      <div class="card">
+        <h2><span class="icon">🔧</span> 容器操作</h2>
+        <div class="btn-group">
+          <?php foreach ($OPS as $key => $op): ?>
+          <form method="post" style="display:inline;" onsubmit="return confirm('<?php echo h($op['confirm']); ?>');"><?php echo csrf_field(); ?><input type="hidden" name="action" value="<?php echo h($key); ?>"><button type="submit" class="btn <?php echo $key === 'restart' ? 'orange' : 'red'; ?>"><?php echo h($op['icon'] . ' ' . $op['label']); ?></button></form>
+          <?php endforeach; ?>
         </div>
-      </form>
-    </div>
-
-    <!-- 文本编辑 -->
-    <div class="cfg-panel" id="cfgPanel-text">
-      <form method="post" id="configTextForm">
-        <?php echo csrf_field(); ?>
-        <input type="hidden" name="action" value="save_config_text">
-        <p class="tip" style="margin-bottom:10px;">直接编辑完整 YAML，保存前会自动备份。修改后需重启容器生效。</p>
-        <textarea name="yaml_content" class="yaml-editor" id="yamlEditor" spellcheck="false"><?php $raw = config_read_raw(); echo $raw !== null ? h($raw) : ''; ?></textarea>
-        <div class="btn-group" style="margin-top:12px;">
-          <button type="submit" class="btn green">💾 保存</button>
-          <button type="button" class="btn" style="background:#64748b;" onclick="reloadYaml()">🔄 重新加载</button>
-        </div>
-      </form>
-    </div>
-
-    <div class="tip" style="margin-top:16px;">
-      ⚠️ 保存配置后需<span style="font-weight:600;">重启容器</span>才生效。
-      如遇写入权限错误，请执行：<code>chmod 666 <?php echo h(CONFIG_PATH); ?></code>
-    </div>
-  </div>
-</div>
-
-<!-- ===== 日志 ===== -->
-<div class="tab-panel" id="panel-log">
-  <div class="card">
-    <div class="log-header">
-      <h2 style="margin-bottom:0;"><span class="icon">📝</span> 运行日志</h2>
-      <div class="auto-refresh">
-        <label><input type="checkbox" id="autoRefresh" checked onchange="toggleAutoRefresh()"> 自动刷新</label>
-        <select id="refreshInterval" onchange="updateRefreshInterval()" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--card);color:var(--text);">
-          <option value="3000">3 秒</option>
-          <option value="5000" selected>5 秒</option>
-          <option value="10000">10 秒</option>
-          <option value="30000">30 秒</option>
-        </select>
-        <button class="btn small gray" onclick="refreshLog()">立即刷新</button>
       </div>
     </div>
-    <div class="log-filter">
-      <input type="text" id="logKeyword" placeholder="🔍 搜索关键词（回车立即过滤）" onkeyup="logKeywordKeyup(event)">
-      <select id="logLevel" onchange="refreshLog()">
-        <option value="">全部级别</option>
-        <option value="DEBUG">DEBUG</option>
-        <option value="INFO">INFO</option>
-        <option value="WARNING">WARNING</option>
-        <option value="ERROR">ERROR</option>
-      </select>
-      <select id="logHours" onchange="refreshLog()">
-        <option value="0">全部时间</option>
-        <option value="1">最近 1 小时</option>
-        <option value="6">最近 6 小时</option>
-        <option value="24">最近 24 小时</option>
-      </select>
-      <select id="logFile" onchange="refreshLog()"><option value="">加载中…</option></select>
-      <button class="btn small primary" id="exportLogBtn">⬇ 导出</button>
-      <button class="btn small gray" onclick="resetLogFilter()">↻ 重置</button>
-    </div>
-    <div class="log-count" id="logCount" style="margin-bottom:8px;"></div>
-    <div class="codebox" id="logBox" style="max-height:600px;"><div style="color:var(--muted);">日志加载中…</div></div>
-  </div>
-</div>
 
+    <!-- ===== 配置 ===== -->
+    <div class="page" id="panel-config">
+      <div class="page-head">
+        <div class="page-title"><span class="pt-icon">⚙️</span>配置</div>
+        <div class="page-desc">图形化或文本方式编辑 config.yaml</div>
+      </div>
+
+      <div class="card">
+        <h2><span class="icon">⚙️</span> 配置管理</h2>
+
+        <div class="cfg-tabs">
+          <button class="cfg-tab active" onclick="switchCfgTab('form')">📋 图形化编辑</button>
+          <button class="cfg-tab" onclick="switchCfgTab('text')">📝 文本编辑</button>
+        </div>
+
+        <!-- 图形化表单 -->
+        <div class="cfg-panel active" id="cfgPanel-form">
+          <form method="post" id="configForm">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="save_config_form">
+
+            <?php foreach ($CONFIG_GROUPS as $gKey => $g): ?>
+            <div class="cfg-group">
+              <h3><?php echo h($g['icon'] . ' ' . $g['title']); ?></h3>
+              <?php foreach ($g['fields'] as $fKey => $f):
+                  $curVal = $cfgVals[$fKey] ?? '';
+                  $curValClean = trim($curVal, "\"'");
+              ?>
+              <div class="cfg-row">
+                <span class="cfg-label"><?php echo h($f['label']); ?><?php if (!empty($f['tip'])): ?><span class="cfg-tip"><?php echo h($f['tip']); ?></span><?php endif; ?></span>
+                <div class="cfg-input">
+                  <?php if ($f['type'] === 'bool'): ?>
+                  <label class="switch">
+                    <input type="checkbox" name="cfg_<?php echo h($fKey); ?>" value="1" <?php echo ($curVal === 'true') ? 'checked' : ''; ?>>
+                    <span class="slider"></span>
+                  </label>
+
+                  <?php elseif ($f['type'] === 'select'): ?>
+                  <select name="cfg_<?php echo h($fKey); ?>" class="cfg-select">
+                    <?php foreach ($f['options'] as $ov => $ol): ?>
+                    <option value="<?php echo h($ov); ?>" <?php echo ($curValClean === $ov) ? 'selected' : ''; ?>><?php echo h($ol); ?></option>
+                    <?php endforeach; ?>
+                  </select>
+
+                  <?php elseif ($f['type'] === 'int'): ?>
+                  <input type="number" name="cfg_<?php echo h($fKey); ?>" value="<?php echo h($curValClean); ?>" class="cfg-input-num">
+
+                  <?php elseif ($f['type'] === 'password'): ?>
+                  <input type="password" name="cfg_<?php echo h($fKey); ?>" placeholder="留空则不修改" class="cfg-input-text cfg-pass" autocomplete="off">
+
+                  <?php elseif ($f['type'] === 'textarea'): ?>
+                  <textarea name="cfg_<?php echo h($fKey); ?>" class="cfg-textarea" rows="3" placeholder="<?php echo h($f['placeholder'] ?? ''); ?>"><?php echo h($curValClean); ?></textarea>
+
+                  <?php else: ?>
+                  <input type="text" name="cfg_<?php echo h($fKey); ?>" value="<?php echo h($curValClean); ?>" class="cfg-input-text" placeholder="<?php echo h($f['placeholder'] ?? ''); ?>">
+                  <?php endif; ?>
+                </div>
+              </div>
+              <?php endforeach; ?>
+            </div>
+            <?php endforeach; ?>
+
+            <div class="btn-group" style="margin-top:16px;">
+              <button type="submit" class="btn green">💾 保存配置</button>
+              <button type="button" class="btn orange" onclick="restartAfterSave()">💾 保存并重启容器</button>
+            </div>
+          </form>
+        </div>
+
+        <!-- 文本编辑 -->
+        <div class="cfg-panel" id="cfgPanel-text">
+          <form method="post" id="configTextForm">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="save_config_text">
+            <p class="tip" style="margin-bottom:10px;">直接编辑完整 YAML，保存前会自动备份。修改后需重启容器生效。</p>
+            <textarea name="yaml_content" class="yaml-editor" id="yamlEditor" spellcheck="false"><?php $raw = config_read_raw(); echo $raw !== null ? h($raw) : ''; ?></textarea>
+            <div class="btn-group" style="margin-top:12px;">
+              <button type="submit" class="btn green">💾 保存</button>
+              <button type="button" class="btn" style="background:#94a3b8;" onclick="reloadYaml()">🔄 重新加载</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="tip" style="margin-top:16px;">
+          ⚠️ 保存配置后需<span style="font-weight:600;">重启容器</span>才生效。
+          如遇写入权限错误，请执行：<code>chmod 666 <?php echo h(CONFIG_PATH); ?></code>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 日志 ===== -->
+    <div class="page" id="panel-log">
+      <div class="page-head">
+        <div class="page-title"><span class="pt-icon">📝</span>日志</div>
+        <div class="page-desc">关键词搜索 · 级别/时间过滤 · 一键导出</div>
+      </div>
+
+      <div class="card">
+        <div class="log-header">
+          <h2 style="margin-bottom:0;"><span class="icon">📝</span> 运行日志</h2>
+          <div class="auto-refresh">
+            <label><input type="checkbox" id="autoRefresh" checked onchange="toggleAutoRefresh()"> 自动刷新</label>
+            <select id="refreshInterval" onchange="updateRefreshInterval()" style="padding:4px 8px;border:1px solid var(--border);border-radius:8px;font-size:12px;background:var(--card-solid);color:var(--text);">
+              <option value="3000">3 秒</option>
+              <option value="5000" selected>5 秒</option>
+              <option value="10000">10 秒</option>
+              <option value="30000">30 秒</option>
+            </select>
+            <button class="btn small gray" onclick="refreshLog()">立即刷新</button>
+          </div>
+        </div>
+        <div class="log-filter">
+          <input type="text" id="logKeyword" placeholder="🔍 搜索关键词（回车立即过滤）" onkeyup="logKeywordKeyup(event)">
+          <select id="logLevel" onchange="refreshLog()">
+            <option value="">全部级别</option>
+            <option value="DEBUG">DEBUG</option>
+            <option value="INFO">INFO</option>
+            <option value="WARNING">WARNING</option>
+            <option value="ERROR">ERROR</option>
+          </select>
+          <select id="logHours" onchange="refreshLog()">
+            <option value="0">全部时间</option>
+            <option value="1">最近 1 小时</option>
+            <option value="6">最近 6 小时</option>
+            <option value="24">最近 24 小时</option>
+          </select>
+          <select id="logFile" onchange="refreshLog()"><option value="">加载中…</option></select>
+          <button class="btn small primary" id="exportLogBtn">⬇ 导出</button>
+          <button class="btn small gray" onclick="resetLogFilter()">↻ 重置</button>
+        </div>
+        <div class="log-count" id="logCount" style="margin-bottom:8px;"></div>
+        <div class="codebox" id="logBox" style="max-height:600px;"><div style="color:var(--muted);">日志加载中…</div></div>
+      </div>
+    </div>
+
+  </div><!-- /content -->
+</div><!-- /layout -->
 <?php endif; ?>
 
-</div><!-- /main -->
-
 <script>
-/* ===== Theme (亮色 / 深色 / 星铁粉紫) ===== */
+/* ===== 主题（默认星铁粉蓝 三月七）===== */
 var THEMES = [
-  { name: '',    icon: '☀️', label: '亮色' },
-  { name: 'dark',  icon: '🌙', label: '深色' },
-  { name: 'march7', icon: '💗', label: '星铁粉紫' }
+  { name: 'march7', icon: '🎀', label: '星铁粉蓝' },
+  { name: 'light',  icon: '☀️', label: '亮色' },
+  { name: 'dark',   icon: '🌙', label: '深色' }
 ];
 function themeIdx(name) {
   for (var i = 0; i < THEMES.length; i++) if (THEMES[i].name === name) return i;
@@ -1347,30 +1505,45 @@ function themeIdx(name) {
 function applyTheme(name) {
   var idx = themeIdx(name), d = document.documentElement, btn = document.getElementById('themeBtn');
   d.setAttribute('data-theme', THEMES[idx].name);
-  btn.textContent = THEMES[idx].icon;
-  btn.title = '切换主题：' + THEMES[idx].label + ' → ' + THEMES[(idx + 1) % THEMES.length].label;
+  if (btn) {
+    btn.textContent = THEMES[idx].icon;
+    btn.title = '切换主题：' + THEMES[idx].label + ' → ' + THEMES[(idx + 1) % THEMES.length].label;
+  }
   try { localStorage.setItem('m7a_theme', THEMES[idx].name); } catch(e) {}
 }
 function toggleTheme() {
-  var cur = document.documentElement.getAttribute('data-theme') || '';
+  var cur = document.documentElement.getAttribute('data-theme') || 'march7';
   applyTheme(THEMES[(themeIdx(cur) + 1) % THEMES.length].name);
 }
 (function() {
-  try {
-    var t = localStorage.getItem('m7a_theme');
-    if (t === 'dark' || t === 'march7') applyTheme(t); else applyTheme('');
-  } catch(e) { applyTheme(''); }
+  var t = null;
+  try { t = localStorage.getItem('m7a_theme'); } catch(e) {}
+  if (t !== 'light' && t !== 'dark' && t !== 'march7') t = 'march7';
+  applyTheme(t);
 })();
 
-/* ===== Tabs ===== */
+/* ===== 侧边栏（移动端抽屉） ===== */
+function openSidebar() {
+  var s = document.getElementById('sidebar'), o = document.getElementById('sidebarOverlay');
+  if (s) s.classList.add('open');
+  if (o) o.classList.add('show');
+}
+function closeSidebar() {
+  var s = document.getElementById('sidebar'), o = document.getElementById('sidebarOverlay');
+  if (s) s.classList.remove('open');
+  if (o) o.classList.remove('show');
+}
+
+/* ===== 页面切换 ===== */
 function switchTab(name) {
-  document.querySelectorAll('.tab-panel').forEach(function(el) { el.classList.remove('active'); });
-  document.querySelectorAll('.tab-btn').forEach(function(el) { el.classList.toggle('active', el.dataset.tab === name); });
+  document.querySelectorAll('.page').forEach(function(el) { el.classList.remove('active'); });
+  document.querySelectorAll('.nav-item').forEach(function(el) { el.classList.toggle('active', el.dataset.tab === name); });
   var panel = document.getElementById('panel-' + name);
   if (panel) panel.classList.add('active');
   try { localStorage.setItem('m7a_tab', name); } catch(e) {}
   if (name === 'log') refreshLog();
   if (name === 'overview') refreshStatus();
+  closeSidebar();
 }
 // Restore tab
 (function() {
@@ -1383,7 +1556,7 @@ function switchTab(name) {
 // 延迟检查更新（等页面渲染完）
 setTimeout(checkUpdate, 1500);
 
-/* ===== Config sub-tabs ===== */
+/* ===== 配置子页切换 ===== */
 function switchCfgTab(name) {
   document.querySelectorAll('.cfg-panel').forEach(function(el) { el.classList.remove('active'); });
   document.querySelectorAll('.cfg-tab').forEach(function(el) { el.classList.remove('active'); });
@@ -1396,7 +1569,6 @@ var _updHiddenAt = 0;
 try { _updHiddenAt = parseInt(localStorage.getItem('m7a_upd_hide') || '0', 10); } catch(e) {}
 
 function checkUpdate() {
-  // 用户点过「稍后」后 1 小时内不再打扰
   if (Date.now() - _updHiddenAt < 3600000) return;
   fetch('?ajax=check_update').then(function(r){ return r.json(); }).then(function(d){
     if (d && d.ok && d.has_update) {
@@ -1436,7 +1608,6 @@ function doUpdate() {
     });
 }
 
-
 function testUpdateSource() {
   var apiEl = document.getElementById('srcApiStatus');
   var rawEl = document.getElementById('srcRawStatus');
@@ -1467,7 +1638,7 @@ function hideUpdate() {
   try { localStorage.setItem('m7a_upd_hide', Date.now()); } catch(e) {}
 }
 
-/* ===== AJAX refresh ===== */
+/* ===== AJAX 刷新 ===== */
 var _logTimer = null;
 var _statusTimer = null;
 var _logKeywordTimer = null;
@@ -1549,12 +1720,11 @@ function refreshStatus() {
     if (box) box.textContent = t;
   }).catch(function() {});
   fetch('?ajax=running').then(function(r) { return r.json(); }).then(function(d) {
-    var badge = document.getElementById('statusBadge');
-    var text = document.getElementById('statusText');
-    if (badge && text) {
+    document.querySelectorAll('.status-badge').forEach(function(badge) {
       badge.className = 'status-badge ' + (d.running ? 'running' : 'stopped');
-      text.textContent = d.running ? '运行中' : '已停止';
-    }
+      var txt = badge.querySelector('.status-text');
+      if (txt) txt.textContent = d.running ? '运行中' : '已停止';
+    });
   }).catch(function() {});
 }
 
@@ -1577,23 +1747,15 @@ function stopAutoRefresh() {
   if (_statusTimer) { clearInterval(_statusTimer); _statusTimer = null; }
 }
 
-// Init auto-refresh
+// Init
 refreshStatus();
 refreshLog();
 startAutoRefresh();
 initLogExport();
 
-/* ===== Save + Restart ===== */
+/* ===== 保存并重启 ===== */
 function restartAfterSave() {
-  document.getElementById('configForm').addEventListener('submit', function() {
-    // After form submit, page will reload with msg; user can then restart
-    // We add a hidden field to signal restart needed
-  });
-  // Submit form normally, then we'll add a restart step
   var form = document.getElementById('configForm');
-  // Create a temporary form that saves then restarts
-  // Actually, just submit normally and add restart action
-  // Simple approach: set a flag
   var input = document.createElement('input');
   input.type = 'hidden';
   input.name = 'then_restart';
