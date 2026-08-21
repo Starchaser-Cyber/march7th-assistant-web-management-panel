@@ -1,7 +1,7 @@
 <?php
 /**
- * March7th Assistant 网页管理面板 v1.6
- * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询 + 多实例切换 + 货币战争 + 停止任务 + 镜像检查 + 更新模式
+ * March7th Assistant 网页管理面板 v1.7
+ * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询 + 多实例切换 + 货币战争 + 停止任务 + 镜像检查 + 更新模式 + 更新分类 + 通知自动消失
  * 纯原生 PHP 单文件 · 宝塔友好
  */
 declare(strict_types=1);
@@ -19,7 +19,7 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.6');            // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.7');            // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -1607,7 +1607,7 @@ html[data-theme="light"] .card { background:var(--card); }
       </div>
 
       <div class="card">
-        <h2><span class="icon">🔗</span> 更新源 <button class="btn small gray" onclick="testUpdateSource()" style="margin-left:auto;">测试连接</button></h2>
+        <h2><span class="icon">🔗</span> 管理面板更新 <button class="btn small gray" onclick="testUpdateSource()" style="margin-left:auto;">测试连接</button></h2>
         <div class="info-grid">
           <div class="info-item"><div class="label">更新源类型</div><div class="value"><?php echo h(strtoupper(UPDATE_TYPE)); ?></div></div>
           <div class="info-item"><div class="label">当前版本</div><div class="value">v<?php echo h(PANEL_VERSION); ?></div></div>
@@ -1617,10 +1617,17 @@ html[data-theme="light"] .card { background:var(--card); }
           <div class="info-item"><div class="label">API 连通</div><div class="value" id="srcApiStatus">未测试</div></div>
           <div class="info-item"><div class="label">文件下载</div><div class="value" id="srcRawStatus">未测试</div></div>
           <div class="info-item"><div class="label">镜像加速</div><div class="value" id="srcMirrorStatus">未测试</div></div>
+        </div>
+        <p class="tip" style="margin:10px 0 0;">自动检查：页面加载时自动检测面板新版本并弹提示，可忽略该版本；手动更新：不自动提示，点「立即检查」查看。</p>
+      </div>
+
+      <div class="card">
+        <h2><span class="icon">🐳</span> 三月七小助手镜像更新</h2>
+        <div class="info-grid">
           <div class="info-item"><div class="label">小助手镜像</div><div class="value" id="imgStatus">检测中…</div></div>
           <div class="info-item"><div class="label">镜像检查</div><div class="value"><button class="btn small gray" onclick="checkImage(true)">重新检查</button></div></div>
         </div>
-        <p class="tip" style="margin:10px 0 0;">自动检查：页面加载时自动检测面板新版本并弹提示，可忽略该版本；手动更新：不自动提示，点「立即检查」查看。小助手镜像对比 GitHub 最新提交，结果缓存 6 小时。</p>
+        <p class="tip" style="margin:10px 0 0;">对比本地镜像构建时间与 GitHub 最新提交，超过 1 小时提示更新；结果缓存 6 小时，可点「重新检查」强制刷新。</p>
       </div>
 
       <div class="card">
@@ -1916,6 +1923,18 @@ function switchTab(name) {
     if (t) switchTab(t);
   } catch(e) {}
 })();
+
+// 操作结果通知 5 秒后自动消失（表单 POST 返回的 .msg 通知条）
+setTimeout(function(){
+  var msgs = document.querySelectorAll('.msg');
+  for (var i = 0; i < msgs.length; i++) {
+    (function(el){
+      el.style.transition = 'opacity .6s ease';
+      setTimeout(function(){ el.style.opacity = '0'; }, 5000);
+      setTimeout(function(){ el.style.display = 'none'; }, 5600);
+    })(msgs[i]);
+  }
+}, 300);
 
 // 延迟检查更新（等页面渲染完）；手动更新模式下不自动检查
 if (PANEL_UPDATE_MODE === 'auto') { setTimeout(function(){ checkUpdate(false); }, 1500); }
