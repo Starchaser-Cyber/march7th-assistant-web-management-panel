@@ -1,4 +1,4 @@
-# March7th 小助手网页管理面板 v1.7（单文件版）
+# March7th 小助手网页管理面板 v1.8（单文件版）
 
 > 浏览器里管三月七，告别 SSH 命令行。
 
@@ -11,13 +11,18 @@
 本面板是 [三月七小助手（March7thAssistant）](https://github.com/moesnow/March7thAssistant) 的配套网页管理工具。原项目是跑在电脑上的 GUI / 命令行程序，人不在电脑前就没法操作；本面板把它部署到服务器后，你用手机或电脑浏览器就能随时远程管理——启动日常任务、清体力、改配置、看日志，全程不需要命令行。
 
 - ✅ 适配已部署 Docker 版小助手的玩家；还没部署的，先按下方 [完整部署教程](#完整部署教程从零开始) 从零搞定（约 20 分钟）
-- ✅ 压缩包发布：下载 `m7a_panel_m7a_panel_v1.7.zip` 解压后上传到网站目录即可使用，无数据库、无框架依赖（核心仅一个 `index.php`）
+- ✅ 压缩包发布：下载 `m7a_panel_m7a_panel_v1.8.zip` 解压后上传到网站目录即可使用，无数据库、无框架依赖（核心仅一个 `index.php`）
 - ✅ 手机、电脑浏览器均可使用
 
 ## 更新记录
 
 <details>
 <summary>📜 点击展开查看完整更新记录</summary>
+
+### v1.8（2026-08-21）
+- 🐳 **小助手镜像一键更新**：镜像卡片新增「⬆️ 更新镜像」按钮，一键拉取最新镜像并重建容器（无需进 SSH 敲 docker pull / compose up）
+- ⚡ **国内加速镜像**：更新时自动依次尝试官方源（ghcr.io）→ 南大镜像（ghcr.nju.edu.cn）→ DaoCloud（ghcr.m.daocloud.io）→ dockerproxy（ghcr.dockerproxy.com），拉取成功后自动打回官方镜像名；官方源慢或不通时也能顺利更新
+- ✅ 基于 v1.7 增量升级，老用户直接覆盖 `index.php` 即可
 
 ### v1.7（2026-08-21）
 - 🗂️ **更新分类**：更新区拆分为「管理面板更新」「三月七小助手镜像更新」两个独立卡片，面板版本与三月七小助手镜像互不混淆，各自一目了然
@@ -85,7 +90,8 @@
 - 📊 **实时状态**：容器运行状态徽章 + 自动刷新（10秒）
 - 🚀 **执行任务**：全量运行 / 日常任务 / 清体力 / 测试通知 / 差分宇宙 / 模拟宇宙 / 货币战争 / 货币战争循环
 - 💰 **货币战争**（v1.5+）：任务页一键运行，活动设置可选标准博弈（提升职级）或超频博弈（快速刷积分），积分后可自动提取位面饰品
-- 🔧 **容器操作**：重启、更新镜像（带确认弹窗）、停止当前任务（v1.6+）
+- 🔧 **容器操作**：重启、停止当前任务（v1.6+）
+- 🐳 **小助手镜像更新**（v1.8+）：镜像卡片一键更新三月七小助手镜像，自动依次尝试官方源与国内加速镜像（南大 / DaoCloud / dockerproxy），拉取成功后重建容器
 - 🗂️ **更新分类**（v1.7+）：更新区拆分「管理面板更新」「三月七小助手镜像更新」独立卡片
 - ⏳ **通知自动消失**（v1.7+）：操作结果通知 5 秒后自动淡出
 - 🔄 **自动更新**（v1.0+）：打开面板自动检查 GitHub/Gitea 新版本，有更新弹条提醒，一键更新（自动备份旧文件）
@@ -230,20 +236,20 @@ docker compose logs -f     # 看到"开始运行"相关日志即正常
 - 防火墙放行对应端口
 
 ### 2. 上传并解压文件
-把下载的 `m7a_panel_m7a_panel_v1.7.zip` 压缩包上传到服务器并解压，将解压出来的**所有文件**（`index.php`、`README.md`、`LICENSE`、`.gitignore`）放到该站点根目录（如 `/www/wwwroot/你的服务器IP_端口/`）。
+把下载的 `m7a_panel_m7a_panel_v1.8.zip` 压缩包上传到服务器并解压，将解压出来的**所有文件**（`index.php`、`README.md`、`LICENSE`、`.gitignore`）放到该站点根目录（如 `/www/wwwroot/你的服务器IP_端口/`）。
 
 > ⚠️ **杀毒软件提示**：在 Windows 电脑本地解压压缩包时，若被杀毒软件（如 Windows Defender、360、火绒、腾讯管家等）拦截或误报，请先**暂停实时防护 / 关闭杀毒软件**再解压，或在杀毒软件中将该压缩包加入信任区。压缩包内仅包含 `index.php`、`README.md`、`LICENSE`、`.gitignore` 四个纯文本文件，不含任何可执行程序，误报是单文件 PHP 脚本的常见情况，请放心使用。
 
 **方法一：宝塔文件管理器（推荐）**
 1. 宝塔面板 → 文件 → 进入 `/www/wwwroot/你的服务器IP_端口/`
-2. 点击「上传」→ 选择本地的 `m7a_panel_m7a_panel_v1.7.zip`（支持拖拽上传）
+2. 点击「上传」→ 选择本地的 `m7a_panel_m7a_panel_v1.8.zip`（支持拖拽上传）
 3. 上传完成后，右键该压缩包 → 点击「解压」
 4. 解压后确认根目录下有 `index.php` 即为成功（`README.md` 是使用说明、`LICENSE` 是开源许可、`.gitignore` 是 Git 忽略规则，保留即可，不要删除）
 
 **方法二：命令行解压**
 ```bash
 cd /www/wwwroot/你的服务器IP_端口/
-unzip m7a_panel_m7a_panel_v1.7.zip
+unzip m7a_panel_m7a_panel_v1.8.zip
 ls -l    # 确认 index.php 已在目录中
 ```
 
@@ -301,7 +307,7 @@ chmod 666 /home/march7thassistant/config.yaml
 
 | 常量 | 说明 | 示例 |
 |------|------|------|
-| `PANEL_VERSION` | 当前版本号（发版时修改） | `'1.7'` |
+| `PANEL_VERSION` | 当前版本号（发版时修改） | `'1.8'` |
 | `UPDATE_ENABLED` | 是否启用自动检查 | `true` |
 | `UPDATE_TYPE` | 更新源类型 | `'github'`（默认） / `'gitea'` |
 | `UPDATE_HOST` | 实例地址（github 时忽略） | `'https://github.com'` |
@@ -324,6 +330,15 @@ chmod 666 /home/march7thassistant/config.yaml
 - 面板对比本地镜像的构建时间与 March7thAssistant GitHub 仓库最新提交时间，本地镜像晚于最新提交 1 小时以上视为「镜像较旧，建议更新」
 - 检查结果缓存 6 小时（`.image_check_cache.json`，自动生成），避免频繁请求 GitHub API 触发限流
 - 点「重新检查」可强制刷新
+
+## 小助手镜像更新（v1.8+）
+
+「三月七小助手镜像更新」卡片新增「⬆️ 更新镜像」按钮，一键拉取最新镜像并重建容器：
+
+- 面板先读取当前容器使用的镜像名（`docker inspect`），再依次尝试：官方源（`ghcr.io/moesnow/march7thassistant`）→ 南大镜像（`ghcr.nju.edu.cn`）→ DaoCloud（`ghcr.m.daocloud.io`）→ dockerproxy（`ghcr.dockerproxy.com`）
+- 任一源拉取成功即停止尝试，并把加速源镜像打回官方镜像名（`docker tag`），保证后续启动 / 检查不受影响；随后自动 `docker compose up -d` 重建容器
+- 官方源正常时走官方源；官方源慢或不通时自动用加速源，国内服务器更新体验更稳
+- 加速镜像列表维护在 `index.php` 的 `assistant_image_candidates()` 函数中，可自行增删
 
 ## 停止当前任务（v1.6+）
 

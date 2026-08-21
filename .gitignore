@@ -1,12 +1,6 @@
 # 面板密码文件
 .panel_pass.php
 
-# 面板自身配置（v1.6+）
-.panel_config.php
-
-# 镜像检查缓存（v1.6+）
-.image_check_cache.json
-
 # 备份文件
 *.bak
 *.bak.*

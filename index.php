@@ -1,7 +1,7 @@
 <?php
 /**
- * March7th Assistant 网页管理面板 v1.7
- * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询 + 多实例切换 + 货币战争 + 停止任务 + 镜像检查 + 更新模式 + 更新分类 + 通知自动消失
+ * March7th Assistant 网页管理面板 v1.8
+ * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询 + 多实例切换 + 货币战争 + 停止任务 + 镜像检查 + 更新模式 + 更新分类 + 通知自动消失 + 小助手镜像加速更新
  * 纯原生 PHP 单文件 · 宝塔友好
  */
 declare(strict_types=1);
@@ -19,7 +19,7 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.7');            // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.8');            // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -40,7 +40,6 @@ $TASKS = array(
 );
 $OPS = array(
     'restart' => array('label' => '重启容器', 'desc' => 'docker compose restart', 'icon' => '🔄', 'confirm' => '确定重启容器？'),
-    'update'  => array('label' => '更新镜像', 'desc' => '拉取最新镜像并重建容器', 'icon' => '⬆️', 'confirm' => '确定拉取最新镜像并重建容器？可能需要几分钟。'),
     'stop_task' => array('label' => '停止当前任务', 'desc' => '终止容器内正在运行的任务', 'icon' => '⏹️', 'confirm' => '确定停止当前正在运行的任务？'),
 );
 
@@ -693,6 +692,59 @@ function do_update() {
  * 对比本地镜像构建时间与 GitHub 最新提交时间，超过 1 小时视为有新版本。
  * 结果缓存 6 小时，避免触发 GitHub API 限流。
  */
+/**
+ * 获取小助手镜像的候选拉取地址（官方源 + 国内加速镜像，v1.8+）
+ * 小助手镜像托管在 ghcr.io；官方源失败时依次尝试加速镜像，加速源拉取成功后 tag 回官方名。
+ */
+function assistant_image_candidates($image) {
+    $cands = array($image);
+    if (stripos($image, 'ghcr.io/') === 0) {
+        $rest = substr($image, strlen('ghcr.io/'));
+        $mirrors = array(
+            'ghcr.nju.edu.cn/' . $rest,          // 1 南京大学镜像（官方 compose 推荐）
+            'ghcr.m.daocloud.io/' . $rest,       // 2 DaoCloud 加速
+            'ghcr.dockerproxy.com/' . $rest,     // 3 dockerproxy 加速
+        );
+        foreach ($mirrors as $m) $cands[] = $m;
+    }
+    return $cands;
+}
+
+/**
+ * 更新三月七小助手镜像（v1.8+）
+ * 依次尝试官方源与加速镜像，成功拉取后 tag 回官方镜像名，再重建容器。
+ */
+function image_update() {
+    $r1 = run_cmd('docker inspect --format "{{.Config.Image}}" ' . escapeshellarg(instance_container()));
+    $image = trim($r1['out']);
+    if ($r1['code'] !== 0 || $image === '' || stripos($image, 'Error') !== false || stripos($image, 'not found') !== false) {
+        return array('ok' => false, 'err' => '无法获取当前容器镜像（容器未运行？）：' . trim($r1['out']));
+    }
+    $cands = assistant_image_candidates($image);
+    $used = '';
+    $detail = array();
+    foreach ($cands as $i => $cand) {
+        $r = run_cmd('docker pull ' . escapeshellarg($cand));
+        if ($r['code'] === 0) { $used = $cand; break; }
+        $detail[] = ($i === 0 ? '官方源' : '加速镜像' . $i) . '失败：' . trim($r['out']);
+    }
+    if ($used === '') {
+        return array('ok' => false, 'err' => '所有镜像源拉取失败：' . implode(' | ', $detail));
+    }
+    // 加速源拉取成功：tag 回官方镜像名，保证 compose 能用原名找到
+    if ($used !== $image) {
+        run_cmd('docker tag ' . escapeshellarg($used) . ' ' . escapeshellarg($image));
+    }
+    $r2 = compose('up -d');
+    if ($r2['code'] !== 0) {
+        return array('ok' => false, 'err' => '镜像已拉取但容器重建失败：' . trim($r2['out']));
+    }
+    // 清缓存，让镜像检查下次强制刷新
+    @unlink(__DIR__ . '/.image_check_cache.json');
+    $srcName = ($used === $image) ? '官方源' : '加速镜像';
+    return array('ok' => true, 'src' => $srcName, 'msg' => '镜像已更新（' . $srcName . '），容器已重建');
+}
+
 function image_check($force = false) {
     $cacheFile = __DIR__ . '/.image_check_cache.json';
     if (!$force && is_file($cacheFile)) {
@@ -967,6 +1019,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $r2 = compose('up -d');
                 $msg = $r2['code'] === 0 ? '镜像已更新，容器已重建' : '更新失败：' . $r2['out'];
             }
+        }
+        elseif ($action === 'update_image') {
+            $r = image_update();
+            echo json_encode($r, JSON_UNESCAPED_UNICODE);
+            exit;
         }
         elseif ($action === 'stop_task') {
             $r = run_cmd('docker exec ' . escapeshellarg(instance_container()) . ' pkill -15 -f "python main.py"');
@@ -1626,8 +1683,9 @@ html[data-theme="light"] .card { background:var(--card); }
         <div class="info-grid">
           <div class="info-item"><div class="label">小助手镜像</div><div class="value" id="imgStatus">检测中…</div></div>
           <div class="info-item"><div class="label">镜像检查</div><div class="value"><button class="btn small gray" onclick="checkImage(true)">重新检查</button></div></div>
+          <div class="info-item"><div class="label">镜像更新</div><div class="value"><button class="btn small orange" onclick="updateAssistantImage()">⬆️ 更新镜像</button></div></div>
         </div>
-        <p class="tip" style="margin:10px 0 0;">对比本地镜像构建时间与 GitHub 最新提交，超过 1 小时提示更新；结果缓存 6 小时，可点「重新检查」强制刷新。</p>
+        <p class="tip" style="margin:10px 0 0;">对比本地镜像构建时间与 GitHub 最新提交，超过 1 小时提示更新；结果缓存 6 小时。更新镜像会自动依次尝试官方源与国内加速镜像（南大 / DaoCloud / dockerproxy），拉取成功后重建容器。</p>
       </div>
 
       <div class="card">
@@ -2030,6 +2088,29 @@ function ignoreVersion() {
   if (!v) return;
   try { localStorage.setItem('m7a_upd_ignore_v', v); } catch(e) {}
   document.getElementById('updateBanner').style.display = 'none';
+}
+
+function updateAssistantImage() {
+  if (!confirm('确定更新三月七小助手镜像？将依次尝试官方源与加速镜像（南大/DaoCloud/dockerproxy），可能需要几分钟。')) return;
+  var btn = event.target;
+  var oldTxt = btn.textContent;
+  btn.disabled = true; btn.textContent = '更新中…';
+  var fd = new FormData();
+  fd.append('action', 'update_image');
+  var csrf = document.querySelector('input[name="csrf"]');
+  if (csrf) fd.append('csrf', csrf.value);
+  fetch('index.php', { method:'POST', body: fd })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d && d.ok) {
+        alert('✅ ' + d.msg);
+        checkImage(true); // 更新后强制刷新镜像状态
+      } else {
+        alert('❌ ' + (d && d.err ? d.err : '更新失败'));
+      }
+      btn.disabled = false; btn.textContent = oldTxt;
+    })
+    .catch(function(){ alert('❌ 网络错误'); btn.disabled = false; btn.textContent = oldTxt; });
 }
 
 function checkImage(force) {
