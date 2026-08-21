@@ -11,7 +11,7 @@
 本面板是 [三月七小助手（March7thAssistant）](https://github.com/moesnow/March7thAssistant) 的配套网页管理工具。原项目是跑在电脑上的 GUI / 命令行程序，人不在电脑前就没法操作；本面板把它部署到服务器后，你用手机或电脑浏览器就能随时远程管理——启动日常任务、清体力、改配置、看日志，全程不需要命令行。
 
 - ✅ 适配已部署 Docker 版小助手的玩家；还没部署的，先按下方 [完整部署教程](#完整部署教程从零开始) 从零搞定（约 20 分钟）
-- ✅ 压缩包发布：下载 `m7a_panel_v1.5.zip` 解压后上传到网站目录即可使用，无数据库、无框架依赖（核心仅一个 `index.php`）
+- ✅ 压缩包发布：下载 `m7a_panel_m7a_panel_v1.5.zip` 解压后上传到网站目录即可使用，无数据库、无框架依赖（核心仅一个 `index.php`）
 - ✅ 手机、电脑浏览器均可使用
 
 ## 更新记录
@@ -216,20 +216,20 @@ docker compose logs -f     # 看到"开始运行"相关日志即正常
 - 防火墙放行对应端口
 
 ### 2. 上传并解压文件
-把下载的 `m7a_panel_v1.5.zip` 压缩包上传到服务器并解压，将解压出来的**所有文件**（`index.php`、`README.md`、`LICENSE`、`.gitignore`）放到该站点根目录（如 `/www/wwwroot/你的服务器IP_端口/`）。
+把下载的 `m7a_panel_m7a_panel_v1.5.zip` 压缩包上传到服务器并解压，将解压出来的**所有文件**（`index.php`、`README.md`、`LICENSE`、`.gitignore`）放到该站点根目录（如 `/www/wwwroot/你的服务器IP_端口/`）。
 
 > ⚠️ **杀毒软件提示**：在 Windows 电脑本地解压压缩包时，若被杀毒软件（如 Windows Defender、360、火绒、腾讯管家等）拦截或误报，请先**暂停实时防护 / 关闭杀毒软件**再解压，或在杀毒软件中将该压缩包加入信任区。压缩包内仅包含 `index.php`、`README.md`、`LICENSE`、`.gitignore` 四个纯文本文件，不含任何可执行程序，误报是单文件 PHP 脚本的常见情况，请放心使用。
 
 **方法一：宝塔文件管理器（推荐）**
 1. 宝塔面板 → 文件 → 进入 `/www/wwwroot/你的服务器IP_端口/`
-2. 点击「上传」→ 选择本地的 `m7a_panel_v1.5.zip`（支持拖拽上传）
+2. 点击「上传」→ 选择本地的 `m7a_panel_m7a_panel_v1.5.zip`（支持拖拽上传）
 3. 上传完成后，右键该压缩包 → 点击「解压」
 4. 解压后确认根目录下有 `index.php` 即为成功（`README.md` 是使用说明、`LICENSE` 是开源许可、`.gitignore` 是 Git 忽略规则，保留即可，不要删除）
 
 **方法二：命令行解压**
 ```bash
 cd /www/wwwroot/你的服务器IP_端口/
-unzip m7a_panel_v1.5.zip
+unzip m7a_panel_m7a_panel_v1.5.zip
 ls -l    # 确认 index.php 已在目录中
 ```
 
