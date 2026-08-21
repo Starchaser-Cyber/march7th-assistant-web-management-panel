@@ -1,16 +1,16 @@
 <?php
 /**
- * March7th Assistant 网页管理面板 v1.2
- * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询
+ * March7th Assistant 网页管理面板 v1.4
+ * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询 + 多实例切换
  * 纯原生 PHP 单文件 · 宝塔友好
  */
 declare(strict_types=1);
 session_start();
 
-define('PROJECT_DIR', '/home/march7thassistant');
-define('CONTAINER', 'm7a');
-define('CONFIG_PATH', PROJECT_DIR . '/config.yaml');
 define('PASS_FILE', __DIR__ . '/.panel_pass.php');
+define('INSTANCES_FILE', __DIR__ . '/.instances.php');
+define('DEFAULT_DIR', '/home/march7thassistant');
+define('DEFAULT_CONTAINER', 'm7a');
 define('SKEY', 'm7a_panel_auth');
 define('CSRF_KEY', 'm7a_panel_csrf');
 
@@ -18,7 +18,7 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.3');            // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.4');            // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -251,16 +251,77 @@ $CONFIG_GROUPS = array(
 /* ===== 工具函数 ===== */
 function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 
+function instances_load() {
+    static $list = null;
+    if ($list !== null) return $list;
+    $fallback = array(array('id' => DEFAULT_CONTAINER, 'name' => '主号', 'container' => DEFAULT_CONTAINER, 'dir' => DEFAULT_DIR, 'default' => true));
+    if (!is_file(INSTANCES_FILE)) return $list = $fallback;
+    $loaded = @include INSTANCES_FILE;
+    if (!is_array($loaded) || !$loaded) return $list = $fallback;
+    $valid = array();
+    foreach ($loaded as $i => $item) {
+        if (!is_array($item)) continue;
+        $container = trim((string)($item['container'] ?? ''));
+        $dir = rtrim(trim((string)($item['dir'] ?? '')), '/');
+        if ($container === '' || $dir === '' || !preg_match('/^[A-Za-z0-9_-]+$/', $container)) continue;
+        $valid[] = array(
+            'id' => (string)($item['id'] ?? $container),
+            'name' => trim((string)($item['name'] ?? $container)) ?: $container,
+            'container' => $container,
+            'dir' => $dir,
+            'default' => !empty($item['default']),
+        );
+    }
+    return $list = $valid ?: $fallback;
+}
+function instances_write($list) {
+    $out = array("<?php", "// March7th 管理面板多实例配置，由面板维护。", "return array(");
+    foreach ($list as $item) {
+        $out[] = '    array(' .
+            "'id' => " . var_export((string)$item['id'], true) . ', ' .
+            "'name' => " . var_export((string)$item['name'], true) . ', ' .
+            "'container' => " . var_export((string)$item['container'], true) . ', ' .
+            "'dir' => " . var_export((string)$item['dir'], true) . ', ' .
+            "'default' => " . (!empty($item['default']) ? 'true' : 'false') . '),';
+    }
+    $out[] = ');';
+    $ok = @file_put_contents(INSTANCES_FILE, implode("\n", $out) . "\n", LOCK_EX) !== false;
+    if ($ok) @chmod(INSTANCES_FILE, 0600);
+    return $ok;
+}
+function instance_current() {
+    $wanted = (string)($_SESSION['m7a_instance'] ?? '');
+    $list = instances_load();
+    foreach ($list as $item) {
+        if ($wanted !== '' && ($item['id'] === $wanted || $item['container'] === $wanted)) return $item;
+    }
+    foreach ($list as $item) if (!empty($item['default'])) return $item;
+    return $list[0];
+}
+function instance_dir() { return instance_current()['dir']; }
+function instance_container() { return instance_current()['container']; }
+function instance_config() { return instance_dir() . '/config.yaml'; }
+function instance_name() { return instance_current()['name']; }
+function instance_switch_to($id) {
+    foreach (instances_load() as $item) {
+        if ($item['id'] === $id || $item['container'] === $id) {
+            $_SESSION['m7a_instance'] = $item['id'];
+            return true;
+        }
+    }
+    return false;
+}
+
 function run_cmd($cmd) {
     $out = array(); $code = 0;
     exec($cmd . ' 2>&1', $out, $code);
     return array('code' => $code, 'out' => implode("\n", $out));
 }
 function compose($args) {
-    return run_cmd('cd ' . escapeshellarg(PROJECT_DIR) . ' && docker compose ' . $args);
+    return run_cmd('cd ' . escapeshellarg(instance_dir()) . ' && docker compose ' . $args);
 }
 function task_start($sub) {
-    return run_cmd('docker exec -d ' . escapeshellarg(CONTAINER) . ' python main.py ' . escapeshellarg($sub));
+    return run_cmd('docker exec -d ' . escapeshellarg(instance_container()) . ' python main.py ' . escapeshellarg($sub));
 }
 function is_auth() { return !empty($_SESSION[SKEY]); }
 
@@ -285,7 +346,7 @@ function set_pass($input) {
     return true;
 }
 function latest_log_path() {
-    $files = glob(PROJECT_DIR . '/logs/*.log');
+    $files = glob(instance_dir() . '/logs/*.log');
     if (!$files) return null;
     usort($files, function($a, $b) { return filemtime($b) - filemtime($a); });
     return $files[0];
@@ -296,7 +357,7 @@ function tail_file($path, $lines = 200) {
     return implode("\n", $out);
 }
 function log_files() {
-    $files = glob(PROJECT_DIR . '/logs/*.log');
+    $files = glob(instance_dir() . '/logs/*.log');
     if (!$files) return array();
     usort($files, function($a, $b) { return filemtime($b) - filemtime($a); });
     return array_values($files);
@@ -326,12 +387,12 @@ function container_status() {
     return $r['out'];
 }
 function container_is_running() {
-    $r = run_cmd('docker inspect -f "{{.State.Running}}" ' . escapeshellarg(CONTAINER) . ' 2>&1');
+    $r = run_cmd('docker inspect -f "{{.State.Running}}" ' . escapeshellarg(instance_container()) . ' 2>&1');
     return trim($r['out']) === 'true';
 }
 function config_read_raw($maxBytes = 65536) {
-    if (!is_file(CONFIG_PATH)) return null;
-    $fp = fopen(CONFIG_PATH, 'rb');
+    if (!is_file(instance_config())) return null;
+    $fp = fopen(instance_config(), 'rb');
     if ($fp === false) return null;
     $data = fread($fp, $maxBytes);
     fclose($fp);
@@ -339,8 +400,8 @@ function config_read_raw($maxBytes = 65536) {
 }
 function yaml_read_simple() {
     $vals = array();
-    if (!is_file(CONFIG_PATH)) return $vals;
-    $lines = file(CONFIG_PATH);
+    if (!is_file(instance_config())) return $vals;
+    $lines = file(instance_config());
     if ($lines === false) return $vals;
     $n = count($lines);
     for ($i = 0; $i < $n; $i++) {
@@ -393,8 +454,8 @@ function yaml_format_val($val, $type) {
     return '"' . str_replace(array('\\', '"'), array('\\\\', '\\"'), $val) . '"';
 }
 function config_save_form($updates) {
-    if (!is_file(CONFIG_PATH)) return array('ok' => false, 'msg' => 'config.yaml 不存在');
-    $lines = file(CONFIG_PATH);
+    if (!is_file(instance_config())) return array('ok' => false, 'msg' => 'config.yaml 不存在');
+    $lines = file(instance_config());
     if ($lines === false) return array('ok' => false, 'msg' => '无法读取 config.yaml');
     $out = array();
     $changed = array();
@@ -418,22 +479,22 @@ function config_save_form($updates) {
         }
         if (!$matched) $out[] = $line;
     }
-    $r = @file_put_contents(CONFIG_PATH, implode('', $out));
-    if ($r === false) return array('ok' => false, 'msg' => '写入失败，请检查文件权限：chmod 666 ' . CONFIG_PATH);
+    $r = @file_put_contents(instance_config(), implode('', $out));
+    if ($r === false) return array('ok' => false, 'msg' => '写入失败，请检查文件权限：chmod 666 ' . instance_config());
     return array('ok' => true, 'msg' => '已更新 ' . count($changed) . ' 项配置', 'changed' => $changed);
 }
 function config_save_text($content) {
     if (strpos($content, 'locales:') === false && strpos($content, 'power_enable:') === false) {
         return array('ok' => false, 'msg' => '内容异常，未找到有效配置键，已取消保存');
     }
-    $r = @file_put_contents(CONFIG_PATH, $content);
-    if ($r === false) return array('ok' => false, 'msg' => '写入失败，请检查文件权限：chmod 666 ' . CONFIG_PATH);
+    $r = @file_put_contents(instance_config(), $content);
+    if ($r === false) return array('ok' => false, 'msg' => '写入失败，请检查文件权限：chmod 666 ' . instance_config());
     return array('ok' => true, 'msg' => '配置已保存');
 }
 function config_backup() {
-    if (!is_file(CONFIG_PATH)) return false;
-    $bak = dirname(CONFIG_PATH) . '/config.yaml.bak.' . date('YmdHis');
-    if (@copy(CONFIG_PATH, $bak)) return $bak;
+    if (!is_file(instance_config())) return false;
+    $bak = dirname(instance_config()) . '/config.yaml.bak.' . date('YmdHis');
+    if (@copy(instance_config(), $bak)) return $bak;
     return false;
 }
 
@@ -656,14 +717,14 @@ if (isset($_GET['ajax']) && is_auth()) {
 
 /* ===== 下载配置备份 ===== */
 if (isset($_GET['download']) && $_GET['download'] === 'config' && is_auth()) {
-    if (!is_file(CONFIG_PATH)) {
+    if (!is_file(instance_config())) {
         header('Location: index.php');
         exit;
     }
     header('Content-Type: application/octet-stream; charset=utf-8');
     header('Content-Disposition: attachment; filename="config.yaml.bak.' . date('YmdHis') . '.yaml"');
-    header('Content-Length: ' . (string) filesize(CONFIG_PATH));
-    readfile(CONFIG_PATH);
+    header('Content-Length: ' . (string) filesize(instance_config()));
+    readfile(instance_config());
     exit;
 }
 
@@ -716,6 +777,92 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     elseif (is_auth() && csrf_check()) {
         if ($action === 'logout') {
             unset($_SESSION[SKEY]); header('Location: index.php'); exit;
+        }
+        // 多实例：切换当前实例
+        elseif ($action === 'instance_switch') {
+            $target = trim((string)($_POST['instance_id'] ?? ''));
+            if ($target !== '' && instance_switch_to($target)) {
+                $msg = '已切换到实例：' . h(instance_name()) . '（' . h(instance_container()) . '）';
+            } else {
+                $err = '切换失败：实例不存在';
+            }
+        }
+        // 多实例：新增 / 编辑
+        elseif ($action === 'instance_save') {
+            $id = trim((string)($_POST['inst_id'] ?? ''));
+            $name = trim((string)($_POST['inst_name'] ?? ''));
+            $container = trim((string)($_POST['inst_container'] ?? ''));
+            $dir = rtrim(trim((string)($_POST['inst_dir'] ?? '')), '/');
+            $isDefault = !empty($_POST['inst_default']);
+            if ($name === '' || $container === '' || $dir === '') {
+                $err = '名称、容器名、项目目录均不能为空';
+            } elseif (!preg_match('/^[A-Za-z0-9_-]+$/', $container)) {
+                $err = '容器名只能包含字母、数字、下划线、短横线';
+            } else {
+                $list = instances_load();
+                $isNew = true;
+                $used = array();
+                foreach ($list as $k => $item) {
+                    if (($item['id'] === $id && $id !== '') || ($id === '' && $item['container'] === $container)) {
+                        $list[$k]['name'] = $name;
+                        $list[$k]['container'] = $container;
+                        $list[$k]['dir'] = $dir;
+                        $list[$k]['default'] = $isDefault;
+                        $isNew = false;
+                    } elseif ($item['container'] === $container) {
+                        $used[] = $item['name'];
+                    }
+                }
+                if ($used) {
+                    $err = '容器名已被实例「' . implode('、', $used) . '」使用';
+                } elseif ($isNew) {
+                    $list[] = array('id' => $container, 'name' => $name, 'container' => $container, 'dir' => $dir, 'default' => $isDefault);
+                }
+                if ($err === '') {
+                    // 保证只有一个默认实例
+                    $anyDefault = false;
+                    foreach ($list as $k => $item) {
+                        if ($isDefault && $item['id'] === ($isNew ? $container : $id)) { $list[$k]['default'] = true; $anyDefault = true; }
+                        elseif ($isDefault && $item['default']) { $list[$k]['default'] = false; }
+                        elseif (!$isDefault && $item['default']) $anyDefault = true;
+                    }
+                    if (!$anyDefault && $list) $list[0]['default'] = true;
+                    if (instances_write($list)) {
+                        if ($isNew) instance_switch_to($container);
+                        $msg = $isNew ? '实例「' . h($name) . '」已添加并切换' : '实例「' . h($name) . '」已更新';
+                    } else {
+                        $err = '写入 ' . h(basename(INSTANCES_FILE)) . ' 失败，请检查面板目录权限';
+                    }
+                }
+            }
+        }
+        // 多实例：删除
+        elseif ($action === 'instance_delete') {
+            $id = trim((string)($_POST['inst_id'] ?? ''));
+            $confirm = trim((string)($_POST['inst_confirm'] ?? ''));
+            $list = instances_load();
+            $target = null;
+            foreach ($list as $item) if ($item['id'] === $id) { $target = $item; break; }
+            if (!$target) {
+                $err = '实例不存在';
+            } elseif ($confirm !== $target['name']) {
+                $err = '确认失败：请输入实例名称「' . h($target['name']) . '」以删除';
+            } elseif (count($list) <= 1) {
+                $err = '至少保留一个实例，无法删除';
+            } else {
+                $newList = array();
+                foreach ($list as $item) if ($item['id'] !== $id) $newList[] = $item;
+                if (!instances_write($newList)) {
+                    $err = '写入失败，实例未删除';
+                } else {
+                    if (instance_current()['id'] === $id) {
+                        unset($_SESSION['m7a_instance']);
+                        $nc = instance_current();
+                        $_SESSION['m7a_instance'] = $nc['id'];
+                    }
+                    $msg = '实例「' . h($target['name']) . '」已删除';
+                }
+            }
         }
         // 任务
         elseif (isset($TASKS[$action])) {
@@ -806,9 +953,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $err = '文件内容异常，未识别到有效 YAML 配置';
                     } else {
                         $bak = config_backup();
-                        $r = @file_put_contents(CONFIG_PATH, $content);
+                        $r = @file_put_contents(instance_config(), $content);
                         if ($r === false) {
-                            $err = '写入失败，请检查文件权限：chmod 666 ' . CONFIG_PATH;
+                            $err = '写入失败，请检查文件权限：chmod 666 ' . instance_config();
                         } else {
                             $msg = '配置已恢复（' . h($fname) . '），原配置备份：' . ($bak ? basename($bak) : '无') . '。需重启容器生效。';
                         }
@@ -1174,6 +1321,51 @@ html[data-theme="light"] .card { background:var(--card); }
   .sidebar { transform:none; }
   .sidebar-overlay { display:none !important; }
 }
+
+/* ===== 多实例切换器 ===== */
+.inst-switcher {
+  display:flex; gap:6px; align-items:center; padding:10px 14px 4px;
+}
+.inst-select {
+  flex:1; min-width:0; padding:8px 10px; border:1px solid var(--border); border-radius:10px;
+  font-size:13px; font-weight:600; color:var(--text); background:var(--card-solid);
+}
+.inst-select:focus { outline:none; border-color:var(--primary); }
+/* ===== 实例管理弹窗 ===== */
+.modal-overlay {
+  position:fixed; inset:0; z-index:1000; background:rgba(0,0,0,.45);
+  display:flex; align-items:flex-start; justify-content:center; padding:48px 16px; overflow-y:auto;
+}
+.modal {
+  width:100%; max-width:640px; background:var(--card-solid); border:1px solid var(--border);
+  border-radius:16px; box-shadow:var(--shadow); overflow:hidden;
+}
+.modal-head {
+  display:flex; align-items:center; justify-content:space-between; padding:16px 20px;
+  border-bottom:1px solid var(--border); background:var(--grad-soft);
+}
+.modal-title { font-size:16px; font-weight:800; }
+.modal-body { padding:16px 20px 20px; }
+.inst-list { display:flex; flex-direction:column; gap:8px; }
+.inst-item {
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:10px 14px; border:1px solid var(--border); border-radius:12px; background:var(--card);
+}
+.inst-name { font-size:14px; font-weight:700; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.inst-meta { font-size:12px; color:var(--muted); margin-top:2px; word-break:break-all; }
+.inst-actions { display:flex; gap:6px; flex-shrink:0; }
+.badge-default, .badge-cur {
+  font-size:11px; font-weight:700; padding:2px 8px; border-radius:999px;
+}
+.badge-default { background:var(--primary-soft); color:var(--primary); }
+.badge-cur { background:var(--green-bg); color:var(--green); }
+.inst-form-wrap {
+  margin-top:14px; padding:14px; border:1px dashed var(--primary); border-radius:12px; background:var(--card2);
+}
+.inst-form { display:flex; flex-direction:column; gap:10px; }
+.inst-form-row { display:flex; align-items:center; gap:10px; font-size:13px; }
+.inst-form-row label { width:70px; flex-shrink:0; color:var(--muted); font-weight:600; }
+.inst-form-row input[type="text"] { flex:1; }
 </style>
 </head>
 <body>
@@ -1216,6 +1408,20 @@ html[data-theme="light"] .card { background:var(--card); }
         <div class="logo-title grad-text">M7A WebUI</div>
         <div class="logo-sub">管理面板 v<?php echo h(PANEL_VERSION); ?></div>
       </div>
+    </div>
+
+    <!-- 实例切换器 -->
+    <div class="inst-switcher">
+      <form method="post" id="instForm" style="display:flex;gap:6px;align-items:center;">
+        <?php echo csrf_field(); ?>
+        <input type="hidden" name="action" value="instance_switch">
+        <select name="instance_id" class="inst-select" onchange="document.getElementById('instForm').submit()" title="切换当前实例">
+          <?php foreach (instances_load() as $it): $cur = instance_current(); ?>
+          <option value="<?php echo h($it['id']); ?>" <?php echo $it['id'] === $cur['id'] ? 'selected' : ''; ?>><?php echo h($it['name']); ?> (<?php echo h($it['container']); ?>)</option>
+          <?php endforeach; ?>
+        </select>
+      </form>
+      <button type="button" class="icon-btn" onclick="openInstModal()" title="管理实例">⚙️</button>
     </div>
 
     <nav class="sidebar-nav">
@@ -1287,9 +1493,10 @@ html[data-theme="light"] .card { background:var(--card); }
       <div class="card">
         <h2><span class="icon">📌</span> 基本信息</h2>
         <div class="info-grid">
-          <div class="info-item"><div class="label">项目目录</div><div class="value" style="font-size:13px;"><?php echo h(PROJECT_DIR); ?></div></div>
-          <div class="info-item"><div class="label">容器名</div><div class="value"><?php echo h(CONTAINER); ?></div></div>
-          <div class="info-item"><div class="label">Config</div><div class="value" style="font-size:13px;"><?php echo is_file(CONFIG_PATH) ? '✅ 存在' : '❌ 不存在'; ?></div></div>
+          <div class="info-item"><div class="label">当前实例</div><div class="value"><?php echo h(instance_name()); ?>（<?php echo h(instance_container()); ?>）</div></div>
+          <div class="info-item"><div class="label">项目目录</div><div class="value" style="font-size:13px;"><?php echo h(instance_dir()); ?></div></div>
+          <div class="info-item"><div class="label">容器名</div><div class="value"><?php echo h(instance_container()); ?></div></div>
+          <div class="info-item"><div class="label">Config</div><div class="value" style="font-size:13px;"><?php echo is_file(instance_config()) ? '✅ 存在' : '❌ 不存在'; ?></div></div>
           <div class="info-item"><div class="label">最近日志</div><div class="value" style="font-size:13px;"><?php $lp = latest_log_path(); echo $lp ? h(basename($lp)) : '暂无'; ?></div></div>
         </div>
       </div>
@@ -1437,7 +1644,7 @@ html[data-theme="light"] .card { background:var(--card); }
 
         <div class="tip" style="margin-top:16px;">
           ⚠️ 保存配置后需<span style="font-weight:600;">重启容器</span>才生效。
-          如遇写入权限错误，请执行：<code>chmod 666 <?php echo h(CONFIG_PATH); ?></code>
+          如遇写入权限错误，请执行：<code>chmod 666 <?php echo h(instance_config()); ?></code>
         </div>
       </div>
     </div>
@@ -1489,6 +1696,53 @@ html[data-theme="light"] .card { background:var(--card); }
 
   </div><!-- /content -->
 </div><!-- /layout -->
+
+<!-- ===== 实例管理弹窗 ===== -->
+<div class="modal-overlay" id="instModal" style="display:none;" onclick="if(event.target===this)closeInstModal()">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title">📦 实例管理</div>
+      <button type="button" class="icon-btn" onclick="closeInstModal()" style="font-size:18px;">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="tip" style="margin-bottom:12px;">每个实例对应一个已部署的三月七小助手 Docker 容器。切换实例后，任务、配置、日志、备份均作用于当前实例。</div>
+
+      <div class="inst-list">
+        <?php foreach (instances_load() as $it): $cur = instance_current(); ?>
+        <div class="inst-item">
+          <div class="inst-info">
+            <div class="inst-name"><?php echo h($it['name']); ?> <?php echo !empty($it['default']) ? '<span class="badge-default">默认</span>' : ''; ?> <?php echo $it['id'] === $cur['id'] ? '<span class="badge-cur">当前</span>' : ''; ?></div>
+            <div class="inst-meta">容器：<?php echo h($it['container']); ?> · 目录：<?php echo h($it['dir']); ?></div>
+          </div>
+          <div class="inst-actions">
+            <button type="button" class="btn small gray" onclick="editInst(<?php echo h(json_encode($it, JSON_UNESCAPED_UNICODE)); ?>)">编辑</button>
+            <button type="button" class="btn small red" onclick="askDeleteInst(<?php echo h(json_encode($it, JSON_UNESCAPED_UNICODE)); ?>)">删除</button>
+          </div>
+        </div>
+        <?php endforeach; ?>
+      </div>
+
+      <!-- 新增/编辑表单 -->
+      <div class="inst-form-wrap" id="instFormWrap" style="display:none;">
+        <form method="post" class="inst-form">
+          <?php echo csrf_field(); ?>
+          <input type="hidden" name="action" value="instance_save">
+          <input type="hidden" name="inst_id" id="inst_id" value="">
+          <div class="inst-form-row"><label>名称</label><input type="text" name="inst_name" id="inst_name" class="cfg-input-text" placeholder="如：主号 / 小号"></div>
+          <div class="inst-form-row"><label>容器名</label><input type="text" name="inst_container" id="inst_container" class="cfg-input-text" placeholder="如：m7a（docker ps 里的 NAME）"></div>
+          <div class="inst-form-row"><label>项目目录</label><input type="text" name="inst_dir" id="inst_dir" class="cfg-input-text" placeholder="如：/home/march7thassistant"></div>
+          <div class="inst-form-row"><label><input type="checkbox" name="inst_default" id="inst_default" value="1"> 设为默认实例</label></div>
+          <div class="btn-group">
+            <button type="submit" class="btn green">💾 保存实例</button>
+            <button type="button" class="btn gray" onclick="hideInstForm()">取消</button>
+          </div>
+        </form>
+      </div>
+
+      <button type="button" class="btn primary small" onclick="newInst()" style="margin-top:12px;">➕ 新增实例</button>
+    </div>
+  </div>
+</div>
 <?php endif; ?>
 
 <script>
@@ -1768,6 +2022,47 @@ function reloadYaml() {
   fetch('?ajax=config_raw').then(function(r) { return r.text(); }).then(function(t) {
     document.getElementById('yamlEditor').value = t;
   }).catch(function() {});
+}
+
+/* ===== 实例管理 ===== */
+function openInstModal() {
+  document.getElementById('instModal').style.display = 'flex';
+}
+function closeInstModal() {
+  document.getElementById('instModal').style.display = 'none';
+}
+function newInst() {
+  document.getElementById('inst_id').value = '';
+  document.getElementById('inst_name').value = '';
+  document.getElementById('inst_container').value = '';
+  document.getElementById('inst_dir').value = '';
+  document.getElementById('inst_default').checked = false;
+  document.getElementById('instFormWrap').style.display = '';
+}
+function hideInstForm() {
+  document.getElementById('instFormWrap').style.display = 'none';
+}
+function editInst(it) {
+  document.getElementById('inst_id').value = it.id || '';
+  document.getElementById('inst_name').value = it.name || '';
+  document.getElementById('inst_container').value = it.container || '';
+  document.getElementById('inst_dir').value = it.dir || '';
+  document.getElementById('inst_default').checked = !!(it.default);
+  document.getElementById('instFormWrap').style.display = '';
+}
+function askDeleteInst(it) {
+  var name = it.name || '';
+  var typed = prompt('删除实例「' + name + '」？\n此操作不可撤销，且会从面板移除该实例配置。\n请输入实例名称以确认：', '');
+  if (typed === null) return;
+  if (typed.trim() !== name) { alert('确认失败：输入的名称与实例名不一致'); return; }
+  var form = document.createElement('form');
+  form.method = 'post';
+  var csrf = document.querySelector('input[name="csrf"]');
+  if (csrf) { var c = document.createElement('input'); c.type = 'hidden'; c.name = 'csrf'; c.value = csrf.value; form.appendChild(c); }
+  var a = document.createElement('input'); a.type = 'hidden'; a.name = 'action'; a.value = 'instance_delete'; form.appendChild(a);
+  var b = document.createElement('input'); b.type = 'hidden'; b.name = 'inst_id'; b.value = it.id || ''; form.appendChild(b);
+  var d = document.createElement('input'); d.type = 'hidden'; d.name = 'inst_confirm'; d.value = name; form.appendChild(d);
+  document.body.appendChild(form); form.submit();
 }
 </script>
 </body>
