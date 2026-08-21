@@ -1,7 +1,7 @@
 <?php
 /**
- * March7th Assistant 网页管理面板 v1.8
- * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询 + 多实例切换 + 货币战争 + 停止任务 + 镜像检查 + 更新模式 + 更新分类 + 通知自动消失 + 小助手镜像加速更新
+ * March7th Assistant 网页管理面板 v1.9
+ * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询 + 多实例切换 + 货币战争 + 停止任务 + 镜像检查 + 更新模式 + 更新分类 + 通知自动消失 + 小助手镜像加速更新 + 镜像版本精准检查
  * 纯原生 PHP 单文件 · 宝塔友好
  */
 declare(strict_types=1);
@@ -19,7 +19,7 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.8');            // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.9');            // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -696,18 +696,105 @@ function do_update() {
  * 获取小助手镜像的候选拉取地址（官方源 + 国内加速镜像，v1.8+）
  * 小助手镜像托管在 ghcr.io；官方源失败时依次尝试加速镜像，加速源拉取成功后 tag 回官方名。
  */
-function assistant_image_candidates($image) {
-    $cands = array($image);
-    if (stripos($image, 'ghcr.io/') === 0) {
-        $rest = substr($image, strlen('ghcr.io/'));
-        $mirrors = array(
-            'ghcr.nju.edu.cn/' . $rest,          // 1 南京大学镜像（官方 compose 推荐）
-            'ghcr.m.daocloud.io/' . $rest,       // 2 DaoCloud 加速
-            'ghcr.dockerproxy.com/' . $rest,     // 3 dockerproxy 加速
-        );
-        foreach ($mirrors as $m) $cands[] = $m;
+/**
+ * 查询 GHCR 官方 latest 镜像的构建时间（v1.9+）
+ * 流程：取 token → 查 latest manifest 拿平台 digest → 查 config digest → 拉 config blob 取 created。
+ * 返回 ISO 时间字符串；失败返回 ''。
+ */
+function ghcr_latest_created($timeout = 10) {
+    if (!function_exists('curl_init')) return '';
+    $repo = 'moesnow/march7thassistant';
+    $base = 'https://ghcr.io/v2/' . $repo;
+    $hdr = array('Accept: application/json', 'User-Agent: M7A-Panel/' . PANEL_VERSION);
+    // 1. token
+    $ch = curl_init('https://ghcr.io/token?scope=repository:' . $repo . ':pull');
+    curl_setopt_array($ch, array(
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => $timeout,
+        CURLOPT_CONNECTTIMEOUT => 5,
+        CURLOPT_HTTPHEADER     => $hdr,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYHOST => false,
+    ));
+    $body = (string)curl_exec($ch);
+    curl_close($ch);
+    $j = json_decode($body, true);
+    $token = $j['token'] ?? '';
+    if ($token === '') return '';
+    $auth = 'Authorization: Bearer ' . $token;
+    // 2. latest manifest（可能是多平台 index 或单 manifest）
+    $ch = curl_init($base . '/manifests/latest');
+    curl_setopt_array($ch, array(
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => $timeout,
+        CURLOPT_CONNECTTIMEOUT => 5,
+        CURLOPT_HTTPHEADER     => array($auth,
+            'Accept: application/vnd.oci.image.index.v1+json',
+            'Accept: application/vnd.docker.distribution.manifest.list.v2+json',
+            'Accept: application/vnd.oci.image.manifest.v1+json',
+            'Accept: application/vnd.docker.distribution.manifest.v2+json'),
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYHOST => false,
+    ));
+    $body = (string)curl_exec($ch);
+    curl_close($ch);
+    $j = json_decode($body, true);
+    if (!is_array($j)) return '';
+    if (isset($j['config']['digest'])) {
+        // 单平台 manifest：直接查 config blob
+        return ghcr_config_created($auth, $base, $j['config']['digest'], $timeout);
     }
-    return $cands;
+    $digest = $j['manifests'][0]['digest'] ?? '';
+    if ($digest === '') return '';
+    // 3. 平台 manifest → config digest
+    $ch = curl_init($base . '/manifests/' . $digest);
+    curl_setopt_array($ch, array(
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => $timeout,
+        CURLOPT_CONNECTTIMEOUT => 5,
+        CURLOPT_HTTPHEADER     => array($auth,
+            'Accept: application/vnd.oci.image.manifest.v1+json',
+            'Accept: application/vnd.docker.distribution.manifest.v2+json'),
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYHOST => false,
+    ));
+    $body = (string)curl_exec($ch);
+    curl_close($ch);
+    $j = json_decode($body, true);
+    $cfg = $j['config']['digest'] ?? '';
+    if ($cfg === '') return '';
+    return ghcr_config_created($auth, $base, $cfg, $timeout);
+}
+
+/** GHCR config blob 取 created（blob 会 307 到对象存储，需跟随重定向） */
+function ghcr_config_created($auth, $base, $cfg, $timeout) {
+    $ch = curl_init($base . '/blobs/' . $cfg);
+    curl_setopt_array($ch, array(
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT        => $timeout,
+        CURLOPT_CONNECTTIMEOUT => 5,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_HTTPHEADER     => array($auth, 'Accept: application/vnd.oci.image.config.v1+json'),
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYHOST => false,
+    ));
+    $body = (string)curl_exec($ch);
+    curl_close($ch);
+    $j = json_decode($body, true);
+    return is_array($j) ? ($j['created'] ?? '') : '';
+}
+
+function assistant_image_candidates($image) {
+    // 已知 registry 前缀（官方源 + 国内加速），无论当前镜像用哪个前缀，都生成完整候选列表
+    $prefs = array('ghcr.io/', 'ghcr.nju.edu.cn/', 'ghcr.m.daocloud.io/', 'ghcr.dockerproxy.com/');
+    $rest = '';
+    foreach ($prefs as $pre) {
+        if (stripos($image, $pre) === 0) { $rest = substr($image, strlen($pre)); break; }
+    }
+    if ($rest === '') return array($image); // 未知 registry，保持原样
+    $cands = array();
+    foreach ($prefs as $pre) $cands[] = $pre . $rest;
+    return array_values(array_unique($cands));
 }
 
 /**
@@ -741,7 +828,12 @@ function image_update() {
     }
     // 清缓存，让镜像检查下次强制刷新
     @unlink(__DIR__ . '/.image_check_cache.json');
-    $srcName = ($used === $image) ? '官方源' : '加速镜像';
+    // 显示实际使用的源名
+    $srcName = '镜像源';
+    $prefs = array('ghcr.io/' => '官方源', 'ghcr.nju.edu.cn/' => '南大镜像', 'ghcr.m.daocloud.io/' => 'DaoCloud', 'ghcr.dockerproxy.com/' => 'dockerproxy');
+    foreach ($prefs as $pre => $label) {
+        if (stripos($used, $pre) === 0) { $srcName = $label; break; }
+    }
     return array('ok' => true, 'src' => $srcName, 'msg' => '镜像已更新（' . $srcName . '），容器已重建');
 }
 
@@ -761,14 +853,9 @@ function image_check($force = false) {
     }
     $r2 = run_cmd('docker image inspect --format "{{.Created}}" ' . escapeshellarg($image));
     $local = trim($r2['out']);
-    $remote = '';
-    $gh_code = 0;
-    $gh = http_get('https://api.github.com/repos/moesnow/March7thAssistant/commits?per_page=1', 8);
-    if ($gh['code'] === 200) {
-        $j = json_decode($gh['body'], true);
-        if (isset($j[0]['commit']['committer']['date'])) $remote = $j[0]['commit']['committer']['date'];
-        $gh_code = $gh['code'];
-    }
+    // v1.9：远程版本改为查 GHCR 官方 latest 镜像构建时间（代码提交时间会误报，官方镜像发布远慢于提交）
+    $remote = ghcr_latest_created(10);
+    $remote_unknown = ($remote === '');
     $has_update = false;
     $lt = strtotime($local);
     $rt = strtotime($remote);
@@ -778,8 +865,8 @@ function image_check($force = false) {
         'image' => $image,
         'local' => $local,
         'remote' => $remote,
+        'remote_unknown' => $remote_unknown,
         'has_update' => $has_update,
-        'gh_code' => $gh_code,
         'ts' => time(),
     );
     @file_put_contents($cacheFile, json_encode($data, JSON_UNESCAPED_UNICODE));
@@ -2122,6 +2209,8 @@ function checkImage(force) {
     if (!d.ok) { el.textContent = '❌ ' + (d.err || '检测失败'); return; }
     if (d.has_update) {
       el.textContent = '⚠️ 镜像较旧，建议更新';
+    } else if (d.remote_unknown) {
+      el.textContent = '⚠️ 无法确认远程版本（GHCR 查询失败），本地：' + (d.local || '未知');
     } else if (d.local) {
       el.textContent = '✅ 已是最新镜像';
     } else {
