@@ -1,7 +1,7 @@
 <?php
 /**
- * March7th Assistant 网页管理面板 v1.4
- * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询 + 多实例切换
+ * March7th Assistant 网页管理面板 v1.4.1
+ * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询 + 多实例切换 + 货币战争
  * 纯原生 PHP 单文件 · 宝塔友好
  */
 declare(strict_types=1);
@@ -18,7 +18,7 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.4');            // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.5');            // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -32,8 +32,10 @@ $TASKS = array(
     'daily'         => array('label' => '日常任务',   'desc' => '清体力/每日实训/领奖励', 'icon' => '📋', 'long' => true),
     'power'         => array('label' => '清体力',     'desc' => '仅清空开拓力', 'icon' => '⚡', 'long' => true),
     'notify'        => array('label' => '测试通知',   'desc' => '发送一条通知测试推送', 'icon' => '🔔', 'long' => false),
-    'divergentloop' => array('label' => '差分宇宙',   'desc' => '差分宇宙周常', 'icon' => '🌌', 'long' => true),
-    'universe'      => array('label' => '模拟宇宙',   'desc' => '模拟宇宙周常', 'icon' => '🔮', 'long' => true),
+    'divergentloop'   => array('label' => '差分宇宙',   'desc' => '差分宇宙周常', 'icon' => '🌌', 'long' => true),
+    'universe'        => array('label' => '模拟宇宙',   'desc' => '模拟宇宙周常', 'icon' => '🔮', 'long' => true),
+    'currencywars'    => array('label' => '货币战争',   'desc' => '按所选模式运行一次（标准/超频）', 'icon' => '💰', 'long' => true),
+    'currencywarsloop'=> array('label' => '货币战争循环', 'desc' => '货币战争循环执行', 'icon' => '♻️', 'long' => true),
 );
 $OPS = array(
     'restart' => array('label' => '重启容器', 'desc' => 'docker compose restart', 'icon' => '🔄', 'confirm' => '确定重启容器？'),
@@ -85,6 +87,9 @@ $CONFIG_GROUPS = array(
         'activity_realmofthestrange_enable'   => array('label' => '异器盈界', 'type' => 'bool'),
         'activity_planarfissure_enable'       => array('label' => '位面分裂', 'type' => 'bool'),
         'activity_journey_highlights_notification_enable' => array('label' => '活动热点通知', 'type' => 'bool'),
+        'currencywars_enable'       => array('label' => '货币战争', 'type' => 'bool', 'tip' => '启用后按所选模式自动完成积分奖励'),
+        'currencywars_type'         => array('label' => '货币战争模式', 'type' => 'select', 'options' => array('normal' => '标准博弈（提升职级）', 'overclock' => '超频博弈（快速刷积分）'), 'tip' => '标准博弈收益更高；超频博弈时间更短'),
+        'currencywars_bonus_enable' => array('label' => '积分后自动提取饰品', 'type' => 'bool', 'tip' => '领取积分奖励后自动消耗深度沉浸器快速提取位面饰品，可能提升运行速度'),
     )),
     'schedule' => array('title' => '定时与循环', 'icon' => '⏰', 'fields' => array(
         'loop_mode'           => array('label' => '循环模式', 'type' => 'select', 'options' => array('scheduled'=>'定时任务','power'=>'根据开拓力')),
