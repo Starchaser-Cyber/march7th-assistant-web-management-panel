@@ -1,6 +1,6 @@
 # March7th 小助手网页管理面板 v1.9（单文件版）
 
-> 浏览器里管三月七，告别 SSH 命令行。
+> 浏览器里管三月七小助手，告别 SSH 命令行。
 
 ![PHP](https://img.shields.io/badge/PHP-8.x-777BB4) ![单文件](https://img.shields.io/badge/单文件-仅一个PHP文件-ff69b4) ![License](https://img.shields.io/badge/License-GPLv3-blue) ![更新](https://img.shields.io/badge/更新-自动检查-4BC0C0)
 
