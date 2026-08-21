@@ -1,7 +1,7 @@
 <?php
 /**
- * March7th Assistant 网页管理面板 v1.4.1
- * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询 + 多实例切换 + 货币战争
+ * March7th Assistant 网页管理面板 v1.6
+ * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询 + 多实例切换 + 货币战争 + 停止任务 + 镜像检查 + 更新模式
  * 纯原生 PHP 单文件 · 宝塔友好
  */
 declare(strict_types=1);
@@ -9,6 +9,7 @@ session_start();
 
 define('PASS_FILE', __DIR__ . '/.panel_pass.php');
 define('INSTANCES_FILE', __DIR__ . '/.instances.php');
+define('PANEL_CONFIG_FILE', __DIR__ . '/.panel_config.php');
 define('DEFAULT_DIR', '/home/march7thassistant');
 define('DEFAULT_CONTAINER', 'm7a');
 define('SKEY', 'm7a_panel_auth');
@@ -18,7 +19,7 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.5');            // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.6');            // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -40,6 +41,7 @@ $TASKS = array(
 $OPS = array(
     'restart' => array('label' => '重启容器', 'desc' => 'docker compose restart', 'icon' => '🔄', 'confirm' => '确定重启容器？'),
     'update'  => array('label' => '更新镜像', 'desc' => '拉取最新镜像并重建容器', 'icon' => '⬆️', 'confirm' => '确定拉取最新镜像并重建容器？可能需要几分钟。'),
+    'stop_task' => array('label' => '停止当前任务', 'desc' => '终止容器内正在运行的任务', 'icon' => '⏹️', 'confirm' => '确定停止当前正在运行的任务？'),
 );
 
 /* ===== 配置字段定义 ===== */
@@ -307,6 +309,31 @@ function instance_dir() { return instance_current()['dir']; }
 function instance_container() { return instance_current()['container']; }
 function instance_config() { return instance_dir() . '/config.yaml'; }
 function instance_name() { return instance_current()['name']; }
+
+/* ===== 面板自身配置（.panel_config.php，自动创建） ===== */
+function panel_config_load() {
+    $def = array('update_mode' => 'auto');
+    if (!is_file(PANEL_CONFIG_FILE)) {
+        $content = "<?php\n// 面板自身配置（自动生成，v1.6+）\nreturn array('update_mode' => 'auto');\n";
+        @file_put_contents(PANEL_CONFIG_FILE, $content);
+        @chmod(PANEL_CONFIG_FILE, 0600);
+        return $def;
+    }
+    $cfg = include PANEL_CONFIG_FILE;
+    return is_array($cfg) ? array_merge($def, $cfg) : $def;
+}
+function panel_config_save($updates) {
+    $cfg = panel_config_load();
+    foreach ($updates as $k => $v) $cfg[$k] = $v;
+    $content = "<?php\n// 面板自身配置（自动生成，v1.6+）\nreturn " . var_export($cfg, true) . ";\n";
+    if (@file_put_contents(PANEL_CONFIG_FILE, $content) === false) return false;
+    @chmod(PANEL_CONFIG_FILE, 0600);
+    return true;
+}
+function panel_update_mode() {
+    $cfg = panel_config_load();
+    return (isset($cfg['update_mode']) && $cfg['update_mode'] === 'manual') ? 'manual' : 'auto';
+}
 function instance_switch_to($id) {
     foreach (instances_load() as $item) {
         if ($item['id'] === $id || $item['container'] === $id) {
@@ -628,6 +655,7 @@ function check_update() {
         'latest'     => $latest,
         'current'    => PANEL_VERSION,
         'note'       => $note,
+        'update_mode'=> panel_update_mode(),
     );
 }
 
@@ -658,6 +686,52 @@ function do_update() {
     }
     $detail = implode('；', $errors);
     return array('ok' => false, 'msg' => '所有更新源下载失败（' . $detail . '）。请检查服务器网络，或在服务器配置代理后重试');
+}
+
+/**
+ * 检查三月七小助手镜像是否最新（v1.6+）
+ * 对比本地镜像构建时间与 GitHub 最新提交时间，超过 1 小时视为有新版本。
+ * 结果缓存 6 小时，避免触发 GitHub API 限流。
+ */
+function image_check($force = false) {
+    $cacheFile = __DIR__ . '/.image_check_cache.json';
+    if (!$force && is_file($cacheFile)) {
+        $c = @json_decode(@file_get_contents($cacheFile), true);
+        if (is_array($c) && isset($c['ts']) && time() - (int)$c['ts'] < 21600) return $c;
+    }
+    $r1 = run_cmd('docker inspect --format "{{.Config.Image}}" ' . escapeshellarg(instance_container()));
+    $image = trim($r1['out']);
+    if ($r1['code'] !== 0 || $image === '' || stripos($image, 'Error') !== false || stripos($image, 'not found') !== false) {
+        $err = trim($r1['out']);
+        $data = array('ok' => false, 'err' => '无法获取容器镜像' . ($err !== '' ? '：' . $err : '（容器未运行？）'), 'ts' => time());
+        @file_put_contents($cacheFile, json_encode($data, JSON_UNESCAPED_UNICODE));
+        return $data;
+    }
+    $r2 = run_cmd('docker image inspect --format "{{.Created}}" ' . escapeshellarg($image));
+    $local = trim($r2['out']);
+    $remote = '';
+    $gh_code = 0;
+    $gh = http_get('https://api.github.com/repos/moesnow/March7thAssistant/commits?per_page=1', 8);
+    if ($gh['code'] === 200) {
+        $j = json_decode($gh['body'], true);
+        if (isset($j[0]['commit']['committer']['date'])) $remote = $j[0]['commit']['committer']['date'];
+        $gh_code = $gh['code'];
+    }
+    $has_update = false;
+    $lt = strtotime($local);
+    $rt = strtotime($remote);
+    if ($lt !== false && $rt !== false && $rt > $lt + 3600) $has_update = true;
+    $data = array(
+        'ok' => true,
+        'image' => $image,
+        'local' => $local,
+        'remote' => $remote,
+        'has_update' => $has_update,
+        'gh_code' => $gh_code,
+        'ts' => time(),
+    );
+    @file_put_contents($cacheFile, json_encode($data, JSON_UNESCAPED_UNICODE));
+    return $data;
 }
 
 /* ===== AJAX 请求 ===== */
@@ -715,6 +789,11 @@ if (isset($_GET['ajax']) && is_auth()) {
     if ($ajax === 'check_update') {
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode(check_update(), JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($ajax === 'image_check') {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(image_check(!empty($_GET['force'])), JSON_UNESCAPED_UNICODE);
         exit;
     }
     exit;
@@ -888,6 +967,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $r2 = compose('up -d');
                 $msg = $r2['code'] === 0 ? '镜像已更新，容器已重建' : '更新失败：' . $r2['out'];
             }
+        }
+        elseif ($action === 'stop_task') {
+            $r = run_cmd('docker exec ' . escapeshellarg(instance_container()) . ' pkill -15 -f "python main.py"');
+            $out = trim($r['out']);
+            if ($r['code'] === 0) {
+                $msg = '⏹️ 已发送停止信号，任务正在终止';
+            } elseif (stripos($out, 'not found') !== false || stripos($out, 'No such file') !== false) {
+                $err = '容器内缺少 pkill 命令，无法停止任务';
+            } else {
+                $msg = '当前没有检测到运行中的任务';
+            }
+        }
+        elseif ($action === 'set_update_mode') {
+            $mode = ($_POST['mode'] ?? '') === 'manual' ? 'manual' : 'auto';
+            if (panel_config_save(array('update_mode' => $mode))) {
+                echo json_encode(array('ok' => true, 'msg' => '更新模式已切换为「' . ($mode === 'manual' ? '手动更新' : '自动检查') . '」'), JSON_UNESCAPED_UNICODE);
+            } else {
+                echo json_encode(array('ok' => false, 'msg' => '写入面板配置失败，请检查 .panel_config.php 权限'), JSON_UNESCAPED_UNICODE);
+            }
+            exit;
         }
         // 配置保存 - 表单模式
         elseif ($action === 'save_config_form') {
@@ -1467,6 +1566,7 @@ html[data-theme="light"] .card { background:var(--card); }
         <div class="update-actions">
           <button class="btn small" id="updBtn" onclick="doUpdate()">一键更新</button>
           <button class="btn gray small" onclick="hideUpdate()">稍后</button>
+          <button class="btn gray small" onclick="ignoreVersion()">忽略此版本</button>
         </div>
       </div>
     </div>
@@ -1512,10 +1612,15 @@ html[data-theme="light"] .card { background:var(--card); }
           <div class="info-item"><div class="label">更新源类型</div><div class="value"><?php echo h(strtoupper(UPDATE_TYPE)); ?></div></div>
           <div class="info-item"><div class="label">当前版本</div><div class="value">v<?php echo h(PANEL_VERSION); ?></div></div>
           <div class="info-item"><div class="label">仓库</div><div class="value" style="font-size:13px;"><?php echo h(UPDATE_OWNER . '/' . UPDATE_REPO); ?></div></div>
+          <div class="info-item"><div class="label">更新模式</div><div class="value"><select id="panelUpdateMode" onchange="setUpdateMode(this.value)" style="font-size:13px;"><option value="auto"<?php echo panel_update_mode() === 'auto' ? ' selected' : ''; ?>>自动检查</option><option value="manual"<?php echo panel_update_mode() === 'manual' ? ' selected' : ''; ?>>手动更新</option></select></div></div>
+          <div class="info-item"><div class="label">检查更新</div><div class="value"><button class="btn small primary" onclick="checkUpdate(true)">立即检查</button></div></div>
           <div class="info-item"><div class="label">API 连通</div><div class="value" id="srcApiStatus">未测试</div></div>
           <div class="info-item"><div class="label">文件下载</div><div class="value" id="srcRawStatus">未测试</div></div>
           <div class="info-item"><div class="label">镜像加速</div><div class="value" id="srcMirrorStatus">未测试</div></div>
+          <div class="info-item"><div class="label">小助手镜像</div><div class="value" id="imgStatus">检测中…</div></div>
+          <div class="info-item"><div class="label">镜像检查</div><div class="value"><button class="btn small gray" onclick="checkImage(true)">重新检查</button></div></div>
         </div>
+        <p class="tip" style="margin:10px 0 0;">自动检查：页面加载时自动检测面板新版本并弹提示，可忽略该版本；手动更新：不自动提示，点「立即检查」查看。小助手镜像对比 GitHub 最新提交，结果缓存 6 小时。</p>
       </div>
 
       <div class="card">
@@ -1812,8 +1917,10 @@ function switchTab(name) {
   } catch(e) {}
 })();
 
-// 延迟检查更新（等页面渲染完）
-setTimeout(checkUpdate, 1500);
+// 延迟检查更新（等页面渲染完）；手动更新模式下不自动检查
+if (PANEL_UPDATE_MODE === 'auto') { setTimeout(function(){ checkUpdate(false); }, 1500); }
+// 加载时展示镜像状态（读缓存，不强制联网）
+setTimeout(function(){ checkImage(false); }, 2200);
 
 /* ===== 配置子页切换 ===== */
 function switchCfgTab(name) {
@@ -1824,13 +1931,15 @@ function switchCfgTab(name) {
 }
 
 /* ===== 自动更新检查 ===== */
-var _updHiddenAt = 0;
-try { _updHiddenAt = parseInt(localStorage.getItem('m7a_upd_hide') || '0', 10); } catch(e) {}
+var PANEL_UPDATE_MODE = <?php echo json_encode(panel_update_mode()); ?>;
+var _updIgnoredV = '';
+try { _updIgnoredV = localStorage.getItem('m7a_upd_ignore_v') || ''; } catch(e) {}
 
-function checkUpdate() {
-  if (Date.now() - _updHiddenAt < 3600000) return;
+function checkUpdate(force) {
+  if (!force && _updIgnoredV) return; // 忽略过该版本则不提示；手动检查可绕过
   fetch('?ajax=check_update').then(function(r){ return r.json(); }).then(function(d){
     if (d && d.ok && d.has_update) {
+      if (!force && d.latest === _updIgnoredV) return;
       document.getElementById('updLatest').textContent = d.latest;
       document.getElementById('updCurrent').textContent = d.current;
       var note = d.note || '';
@@ -1895,6 +2004,48 @@ function testUpdateSource() {
 function hideUpdate() {
   document.getElementById('updateBanner').style.display = 'none';
   try { localStorage.setItem('m7a_upd_hide', Date.now()); } catch(e) {}
+}
+
+function ignoreVersion() {
+  var v = document.getElementById('updLatest').textContent;
+  if (!v) return;
+  try { localStorage.setItem('m7a_upd_ignore_v', v); } catch(e) {}
+  document.getElementById('updateBanner').style.display = 'none';
+}
+
+function checkImage(force) {
+  var el = document.getElementById('imgStatus');
+  if (!el) return;
+  el.textContent = '检测中…';
+  fetch('?ajax=image_check' + (force ? '&force=1' : '')).then(function(r){ return r.json(); }).then(function(d){
+    if (!d) { el.textContent = '无响应'; return; }
+    if (!d.ok) { el.textContent = '❌ ' + (d.err || '检测失败'); return; }
+    if (d.has_update) {
+      el.textContent = '⚠️ 镜像较旧，建议更新';
+    } else if (d.local) {
+      el.textContent = '✅ 已是最新镜像';
+    } else {
+      el.textContent = d.err || '检测完成';
+    }
+  }).catch(function(){ el.textContent = '网络错误'; });
+}
+
+function setUpdateMode(mode) {
+  var fd = new FormData();
+  fd.append('action', 'set_update_mode');
+  fd.append('mode', mode);
+  var csrf = document.querySelector('input[name="csrf"]');
+  if (csrf) fd.append('csrf', csrf.value);
+  fetch('index.php', { method:'POST', body: fd })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d && d.ok) {
+        alert('✅ ' + d.msg);
+        if (mode === 'manual') document.getElementById('updateBanner').style.display = 'none';
+      } else {
+        alert('❌ ' + (d && d.msg ? d.msg : '切换失败'));
+      }
+    }).catch(function(){ alert('❌ 网络错误'); });
 }
 
 /* ===== AJAX 刷新 ===== */
