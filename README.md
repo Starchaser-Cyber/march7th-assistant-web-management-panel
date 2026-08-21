@@ -1,4 +1,4 @@
-# March7th 小助手网页管理面板 v1.4（单文件版）
+# March7th 小助手网页管理面板 v1.5（单文件版）
 
 > 浏览器里管三月七，告别 SSH 命令行。
 
@@ -11,13 +11,19 @@
 本面板是 [三月七小助手（March7thAssistant）](https://github.com/moesnow/March7thAssistant) 的配套网页管理工具。原项目是跑在电脑上的 GUI / 命令行程序，人不在电脑前就没法操作；本面板把它部署到服务器后，你用手机或电脑浏览器就能随时远程管理——启动日常任务、清体力、改配置、看日志，全程不需要命令行。
 
 - ✅ 适配已部署 Docker 版小助手的玩家；还没部署的，先按下方 [完整部署教程](#完整部署教程从零开始) 从零搞定（约 20 分钟）
-- ✅ 压缩包发布：下载 `m7a_panel_v1.4.zip` 解压后上传到网站目录即可使用，无数据库、无框架依赖（核心仅一个 `index.php`）
+- ✅ 压缩包发布：下载 `m7a_panel_v1.5.zip` 解压后上传到网站目录即可使用，无数据库、无框架依赖（核心仅一个 `index.php`）
 - ✅ 手机、电脑浏览器均可使用
 
 ## 更新记录
 
 <details>
 <summary>📜 点击展开查看完整更新记录</summary>
+
+### v1.5（2026-08-21）
+- 🖥️ **云游戏画面实时预览**：面板内嵌「直播式」画面窗口，实时看到三月七在云游戏里的操作画面（WebSocket + Canvas 播放器，不是图片流）
+- 🎬 **直播体验**：黑色直播窗口 + 状态灯（连接中 / 等待画面 / 直播中 / 断线自动重连）+ 实时 fps 帧率数字
+- 🔀 **画质一键切换**：720P（默认，约 5-10fps）与 480P（帧率翻倍，约 10-15fps），切换即生效，无需重启服务
+- 🛠️ **部署自检引导**：预览连接失败时自动展开配置教程（Nginx 反代示例 + 防火墙放行 + 服务检查），下载部署的用户也能照着配好
 
 ### v1.4（2026-08-21）
 - 🔀 **多实例切换**：一个面板同时管理多个三月七小助手容器（如多个账号），侧边栏下拉一键切换，每个实例独立目录 / 容器 / 配置 / 日志 / 任务
@@ -63,6 +69,7 @@
 ## 功能
 
 ### 🚀 核心管理
+- 🖥️ **云游戏画面预览**（v1.5+）：面板内嵌「直播式」画面窗口，实时查看云游戏画面；状态灯 + 实时 fps + 720P/480P 一键切换；未配置时自动展开部署引导
 - 🔀 **多实例切换**（v1.4+）：侧边栏下拉一键切换多个小助手实例（多账号 / 多容器），每个实例独立管理任务、配置、日志
 - 📊 **实时状态**：容器运行状态徽章 + 自动刷新（10秒）
 - 🚀 **执行任务**：全量运行 / 日常任务 / 清体力 / 测试通知 / 差分宇宙 / 模拟宇宙
@@ -209,20 +216,20 @@ docker compose logs -f     # 看到"开始运行"相关日志即正常
 - 防火墙放行对应端口
 
 ### 2. 上传并解压文件
-把下载的 `m7a_panel_v1.4.zip` 压缩包上传到服务器并解压，将解压出来的**所有文件**（`index.php`、`README.md`、`LICENSE`、`.gitignore`）放到该站点根目录（如 `/www/wwwroot/你的服务器IP_端口/`）。
+把下载的 `m7a_panel_v1.5.zip` 压缩包上传到服务器并解压，将解压出来的**所有文件**（`index.php`、`README.md`、`LICENSE`、`.gitignore`）放到该站点根目录（如 `/www/wwwroot/你的服务器IP_端口/`）。`preview_server.py` 是云游戏画面预览的服务器端转发脚本，**不需要放进网站目录**，按下方「云游戏画面预览配置」章节使用。
 
-> ⚠️ **杀毒软件提示**：在 Windows 电脑本地解压压缩包时，若被杀毒软件（如 Windows Defender、360、火绒、腾讯管家等）拦截或误报，请先**暂停实时防护 / 关闭杀毒软件**再解压，或在杀毒软件中将该压缩包加入信任区。压缩包内仅包含 `index.php`、`README.md`、`LICENSE`、`.gitignore` 四个纯文本文件，不含任何可执行程序，误报是单文件 PHP 脚本的常见情况，请放心使用。
+> ⚠️ **杀毒软件提示**：在 Windows 电脑本地解压压缩包时，若被杀毒软件（如 Windows Defender、360、火绒、腾讯管家等）拦截或误报，请先**暂停实时防护 / 关闭杀毒软件**再解压，或在杀毒软件中将该压缩包加入信任区。压缩包内均为纯文本源码文件（`index.php`、`README.md`、`LICENSE`、`.gitignore`、`preview_server.py`），不含任何可执行程序，误报是 PHP / Python 脚本的常见情况，请放心使用。
 
 **方法一：宝塔文件管理器（推荐）**
 1. 宝塔面板 → 文件 → 进入 `/www/wwwroot/你的服务器IP_端口/`
-2. 点击「上传」→ 选择本地的 `m7a_panel_v1.4.zip`（支持拖拽上传）
+2. 点击「上传」→ 选择本地的 `m7a_panel_v1.5.zip`（支持拖拽上传）
 3. 上传完成后，右键该压缩包 → 点击「解压」
 4. 解压后确认根目录下有 `index.php` 即为成功（`README.md` 是使用说明、`LICENSE` 是开源许可、`.gitignore` 是 Git 忽略规则，保留即可，不要删除）
 
 **方法二：命令行解压**
 ```bash
 cd /www/wwwroot/你的服务器IP_端口/
-unzip m7a_panel_v1.4.zip
+unzip m7a_panel_v1.5.zip
 ls -l    # 确认 index.php 已在目录中
 ```
 
@@ -273,7 +280,7 @@ chmod 666 /home/march7thassistant/config.yaml
 
 | 常量 | 说明 | 示例 |
 |------|------|------|
-| `PANEL_VERSION` | 当前版本号（发版时修改） | `'1.4'` |
+| `PANEL_VERSION` | 当前版本号（发版时修改） | `'1.5'` |
 | `UPDATE_ENABLED` | 是否启用自动检查 | `true` |
 | `UPDATE_TYPE` | 更新源类型 | `'github'`（默认） / `'gitea'` |
 | `UPDATE_HOST` | 实例地址（github 时忽略） | `'https://github.com'` |
@@ -308,6 +315,60 @@ chmod 666 /home/march7thassistant/config.yaml
 - 删除实例需输入实例名二次确认；至少保留一个实例；删除当前正在使用的实例会自动切回默认实例
 - 所有实例管理操作均需登录并带 CSRF 校验，与面板其他操作同级保护
 - 如需手动编辑实例列表，保持 `.instances.php` 的 PHP 数组格式即可，`id` 默认取容器名，`default` 有且仅有一个为 `true`
+
+## 云游戏画面预览配置（v1.5+）
+
+面板概览页顶部新增「云游戏画面」直播窗口，实时显示三月七在云游戏里的操作画面（WebSocket + Canvas 播放器）。**未配置时窗口会显示红色引导区**，照着下面三步配即可：
+
+### 原理
+```
+小助手容器内 Chrome(CDP 9222 抓帧)
+  → 容器内转发服务 preview_server.py（9223，WebSocket 帧流）
+  → 宿主机 Nginx 反代 /m7a-preview/
+  → 面板页面内 Canvas 播放器
+```
+
+### 第一步：容器内运行转发服务（每台服务器只需一次，容器重启后需重新启动）
+把 `preview_server.py` 放进容器并启动（该文件随本包提供，位于压缩包根目录）：
+
+```bash
+docker cp preview_server.py m7a:/m7a/preview_server.py
+docker exec -d m7a sh -c "nohup python3 /m7a/preview_server.py > /tmp/preview_v2.log 2>&1 &"
+```
+
+验证（返回 `{"ok": true, "cdp": true}` 即正常）：
+
+```bash
+docker exec m7a sh -c "docker_ip=\$(hostname -i); curl -s -m 5 http://\$docker_ip:9223/health"
+```
+
+> 小助手容器启动 Chrome 时若遇到 CDP 连接被拒，在 `config.yaml` 的 Chrome 启动参数里加 `--remote-allow-origins=*` 即可。
+
+### 第二步：Nginx 反代（WebSocket 版）
+宝塔面板 → 网站 → 找到面板站点 → 设置 → 配置文件，在 `server { }` 内添加：
+
+```nginx
+    # 三月七云游戏画面预览（WebSocket 帧流）
+    location /m7a-preview/ {
+        proxy_pass http://容器IP:9223/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+    }
+```
+
+容器 IP 用 `docker inspect m7a --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'` 查询，替换上方「容器IP」。
+
+### 第三步：防火墙放行
+确保面板站点端口（如 80/443）在防火墙中已放行；预览数据走的是面板同端口反代，无需额外开放 9223（它只在服务器内网使用）。
+
+### 使用
+- 打开面板概览页即自动连接；小助手跑任务时画面实时刷新（720P 约 5-10fps）
+- 480P 按钮一键切换（帧率翻倍约 10-15fps），切换即时生效
+- 空闲时显示「等待云游戏画面」；断线自动 3 秒重连，连续失败会展开配置引导
 
 ## 安全提醒
 - 面板能触发游戏任务和修改配置，**务必设置强密码**

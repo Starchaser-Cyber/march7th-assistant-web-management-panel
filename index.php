@@ -1,6 +1,6 @@
 <?php
 /**
- * March7th Assistant 网页管理面板 v1.4
+ * March7th Assistant 网页管理面板 v1.5
  * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询 + 多实例切换
  * 纯原生 PHP 单文件 · 宝塔友好
  */
@@ -18,7 +18,7 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.4');            // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.5');            // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -1366,6 +1366,59 @@ html[data-theme="light"] .card { background:var(--card); }
 .inst-form-row { display:flex; align-items:center; gap:10px; font-size:13px; }
 .inst-form-row label { width:70px; flex-shrink:0; color:var(--muted); font-weight:600; }
 .inst-form-row input[type="text"] { flex:1; }
+
+/* ===== v1.5 云游戏画面直播预览 ===== */
+.live-stage {
+  position:relative; margin-top:12px; background:#0b0b12; border-radius:12px;
+  overflow:hidden; box-shadow:inset 0 0 0 1px rgba(255,255,255,.06), 0 4px 24px rgba(0,0,0,.35);
+}
+.live-statusbar {
+  display:flex; align-items:center; gap:8px; padding:8px 14px;
+  background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.02));
+  border-bottom:1px solid rgba(255,255,255,.06);
+}
+.live-dot { width:9px; height:9px; border-radius:50%; flex-shrink:0; background:#9ca3af; }
+.live-dot.yellow { background:#fbbf24; box-shadow:0 0 8px rgba(251,191,36,.8); animation:lvpulse 1.2s infinite; }
+.live-dot.green  { background:#22c55e; box-shadow:0 0 10px rgba(34,197,94,.9); animation:lvpulse 1.2s infinite; }
+.live-dot.red    { background:#ef4444; box-shadow:0 0 8px rgba(239,68,68,.8); animation:lvpulse 1s infinite; }
+@keyframes lvpulse { 0%,100%{opacity:1;} 50%{opacity:.4;} }
+.live-status { color:#e5e7eb; font-size:12px; font-weight:600; letter-spacing:.3px; }
+.live-fps { margin-left:auto; color:#9ca3af; font-size:12px; font-variant-numeric:tabular-nums; }
+.live-fps b { color:#22c55e; font-size:13px; }
+#liveCanvas { display:block; width:100%; aspect-ratio:16/9; background:#000; }
+.live-placeholder {
+  position:absolute; left:0; right:0; top:34px; bottom:0;
+  display:flex; align-items:center; justify-content:center;
+  color:#6b7280; font-size:14px; letter-spacing:1px; pointer-events:none;
+}
+.live-guide { padding:14px; border-top:1px solid rgba(239,68,68,.3); background:rgba(239,68,68,.07); }
+.guide-head { color:#fca5a5; font-size:13px; font-weight:700; margin-bottom:8px; }
+.live-guide pre {
+  background:#160b0d; color:#f3d2d2; font-size:12px; line-height:1.6;
+  padding:10px 12px; border-radius:8px; overflow-x:auto; white-space:pre-wrap; word-break:break-all;
+  margin:0 0 8px;
+}
+.guide-item { color:#e5e7eb; font-size:12px; line-height:1.7; margin:4px 0; }
+.guide-item code { background:rgba(255,255,255,.08); padding:1px 6px; border-radius:4px; font-size:11px; }
+.live-badge {
+  display:inline-flex; align-items:center; gap:5px; margin-left:8px; padding:2px 10px;
+  border-radius:99px; font-size:11px; font-weight:700; vertical-align:2px;
+}
+.live-badge.gray   { background:#f1f5f9; color:#64748b; }
+.live-badge.yellow { background:#fffbeb; color:#b45309; }
+.live-badge.green  { background:#ecfdf5; color:#059669; }
+.live-badge.red    { background:#fef2f2; color:#dc2626; }
+html[data-theme="dark"] .live-badge.gray { background:#1e293b; color:#94a3b8; }
+.live-res { margin-left:auto; display:inline-flex; gap:4px; }
+.res-btn {
+  padding:3px 12px; border-radius:8px; border:1px solid var(--border); background:var(--card2);
+  color:var(--muted); font-size:12px; font-weight:700; cursor:pointer; transition:all .15s; font-family:inherit;
+}
+.res-btn:hover { border-color:var(--primary); color:var(--primary); }
+.res-btn.active {
+  background:var(--grad); color:#fff; border-color:transparent;
+  box-shadow:0 2px 10px rgba(236,72,153,.35);
+}
 </style>
 </head>
 <body>
@@ -1474,6 +1527,35 @@ html[data-theme="light"] .card { background:var(--card); }
       <div class="page-head">
         <div class="page-title"><span class="pt-icon">📊</span>概览</div>
         <div class="page-desc">容器状态、快捷操作与基本信息</div>
+      </div>
+
+      <!-- ===== 云游戏画面直播预览（v1.5） ===== -->
+      <div class="card">
+        <h2><span class="icon">🖥️</span> 云游戏画面
+          <span id="liveBadge" class="live-badge gray">未连接</span>
+          <span class="live-res">
+            <button type="button" class="res-btn active" data-res="720p" onclick="setRes('720p')">720P</button>
+            <button type="button" class="res-btn" data-res="480p" onclick="setRes('480p')">480P</button>
+          </span>
+        </h2>
+        <div class="live-stage">
+          <div class="live-statusbar">
+            <span id="liveDot" class="live-dot gray"></span>
+            <span class="live-status" id="liveStatus">初始化…</span>
+            <span class="live-fps" id="liveFps">0 fps</span>
+          </div>
+          <canvas id="liveCanvas" width="1280" height="720"></canvas>
+          <div class="live-placeholder" id="livePlaceholder">🎮 等待云游戏画面…</div>
+          <div class="live-guide" id="liveGuide" style="display:none;">
+            <div class="guide-head">🔧 预览服务连接失败</div>
+            <div class="guide-item" id="guideReason"></div>
+            <div class="guide-item">部署者请按以下步骤检查（Nginx 反代 与 防火墙）：</div>
+            <pre id="guideNginx"></pre>
+            <div class="guide-item" id="guideFirewall"></div>
+            <div class="guide-item">若以上均正常，检查容器内转发服务是否运行：<code>docker exec m7a python3 /m7a/preview_server.py</code>，并确认 <code>curl http://容器IP:9223/health</code> 返回 <code>{"ok":true,"cdp":true}</code>。</div>
+          </div>
+        </div>
+        <p class="tip">画面仅在小助手执行任务时出现，空闲时显示等待状态；720P 约 5-10fps，480P 帧率更高。长时间无画面时，展开上方红色引导区查看部署配置方法。</p>
       </div>
 
       <div class="card">
@@ -2064,6 +2146,123 @@ function askDeleteInst(it) {
   var d = document.createElement('input'); d.type = 'hidden'; d.name = 'inst_confirm'; d.value = name; form.appendChild(d);
   document.body.appendChild(form); form.submit();
 }
+
+/* ===== 云游戏画面直播预览（v1.5） ===== */
+var PV = {
+  ws:null, res:'720p', canvas:null, ctx:null, dot:null, statusEl:null,
+  fpsEl:null, badge:null, placeholder:null, guide:null, guideReason:null,
+  guideNginx:null, guideFirewall:null, fps:0, fpsTimer:null,
+  waitTimer:null, reconnectTimer:null, failCount:0, state:'init'
+};
+function pvInit() {
+  PV.canvas = document.getElementById('liveCanvas');
+  if (!PV.canvas) return;
+  PV.ctx = PV.canvas.getContext('2d');
+  PV.dot = document.getElementById('liveDot');
+  PV.statusEl = document.getElementById('liveStatus');
+  PV.fpsEl = document.getElementById('liveFps');
+  PV.badge = document.getElementById('liveBadge');
+  PV.placeholder = document.getElementById('livePlaceholder');
+  PV.guide = document.getElementById('liveGuide');
+  PV.guideReason = document.getElementById('guideReason');
+  PV.guideNginx = document.getElementById('guideNginx');
+  PV.guideFirewall = document.getElementById('guideFirewall');
+  PV.fpsTimer = setInterval(function(){ PV.fpsEl.innerHTML = '<b>' + PV.fps + '</b> fps'; PV.fps = 0; }, 1000);
+  pvConnect();
+}
+function pvWsUrl() {
+  var proto = (location.protocol === 'https:') ? 'wss://' : 'ws://';
+  return proto + location.host + '/m7a-preview/ws?res=' + PV.res;
+}
+function pvSetState(state, text) {
+  PV.state = state;
+  var dotColor = { init:'gray', connecting:'yellow', waiting:'yellow', live:'green', error:'red' }[state] || 'gray';
+  var badgeText = { init:'未连接', connecting:'连接中', waiting:'等待画面', live:'直播中', error:'已断开' }[state] || '未连接';
+  var label = { init:'初始化…', connecting:'连接中…', waiting:'等待云游戏画面', live:'直播中', error:'连接断开，3 秒后重连' }[state] || '';
+  PV.dot.className = 'live-dot ' + dotColor;
+  PV.badge.className = 'live-badge ' + dotColor;
+  PV.badge.textContent = badgeText;
+  PV.statusEl.textContent = text || label;
+  PV.placeholder.style.display = (state === 'live') ? 'none' : 'flex';
+}
+function pvConnect() {
+  if (PV.ws) { try { PV.ws.onclose = null; PV.ws.close(); } catch(e){} PV.ws = null; }
+  pvSetState('connecting');
+  try {
+    PV.ws = new WebSocket(pvWsUrl());
+  } catch(e) {
+    pvFail('浏览器无法创建 WebSocket 连接：' + e.message);
+    return;
+  }
+  PV.ws.binaryType = 'arraybuffer';
+  PV.ws.onopen = function() {
+    PV.failCount = 0;
+    pvSetState('waiting');
+    PV.lastFrameAt = Date.now();
+    if (PV.waitTimer) clearTimeout(PV.waitTimer);
+    PV.waitTimer = setTimeout(function(){
+      if (PV.state === 'waiting') PV.statusEl.textContent = '等待云游戏画面（小助手空闲时无画面）';
+    }, 4000);
+  };
+  PV.ws.onmessage = function(ev) {
+    if (!(ev.data instanceof ArrayBuffer) && !(ev.data instanceof Blob)) return;
+    try {
+      createImageBitmap(new Blob([ev.data], {type:'image/jpeg'})).then(function(bmp){
+        PV.canvas.width = bmp.width; PV.canvas.height = bmp.height;
+        PV.ctx.drawImage(bmp, 0, 0);
+        try { bmp.close(); } catch(e){}
+        PV.fps++;
+        PV.lastFrameAt = Date.now();
+        if (PV.state !== 'live') pvSetState('live');
+      }).catch(function(){});
+    } catch(e) {}
+  };
+  PV.ws.onerror = function() { try { PV.ws.close(); } catch(e){} };
+  PV.ws.onclose = function() {
+    if (PV.waitTimer) { clearTimeout(PV.waitTimer); PV.waitTimer = null; }
+    PV.failCount++;
+    pvSetState('error');
+    if (PV.failCount >= 3) pvShowGuide();
+    pvReconnect();
+  };
+}
+function pvReconnect() {
+  if (PV.reconnectTimer) clearTimeout(PV.reconnectTimer);
+  PV.reconnectTimer = setTimeout(function(){ pvConnect(); }, 3000);
+}
+function pvFail(reason) {
+  PV.failCount++;
+  pvSetState('error');
+  PV.statusEl.textContent = '连接失败';
+  if (PV.failCount >= 2) pvShowGuide(reason);
+}
+function pvShowGuide(reason) {
+  if (!PV.guide) return;
+  var url = pvWsUrl();
+  PV.guideReason.textContent = '当前连接地址：' + url + (reason ? '（' + reason + '）' : '');
+  PV.guideNginx.textContent =
+    '# 1. 在站点 Nginx 配置的 server { } 内添加反代（WebSocket 版）\n' +
+    'location /m7a-preview/ {\n' +
+    '    proxy_pass http://容器IP:9223/;\n' +
+    '    proxy_http_version 1.1;\n' +
+    '    proxy_set_header Upgrade $http_upgrade;\n' +
+    '    proxy_set_header Connection "upgrade";\n' +
+    '    proxy_buffering off;\n' +
+    '    proxy_read_timeout 3600s;\n' +
+    '}';
+  PV.guideFirewall.textContent = '2. 防火墙放行面板端口（如 80/443），并确认容器内 9223 端口已启动转发服务；用 docker inspect 容器名 | grep IPAddress 查容器 IP 后，把上方「容器IP」替换为实际值。';
+  PV.guide.style.display = '';
+}
+function setRes(r) {
+  if (PV.res === r) return;
+  PV.res = r;
+  var btns = document.querySelectorAll('.res-btn');
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].className = 'res-btn' + (btns[i].getAttribute('data-res') === r ? ' active' : '');
+  }
+  pvConnect();
+}
+pvInit();
 </script>
 </body>
 </html>
