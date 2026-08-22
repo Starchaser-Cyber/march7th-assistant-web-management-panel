@@ -19,7 +19,7 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.12');           // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.13');           // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -875,6 +875,151 @@ function image_check($force = false) {
     return $data;
 }
 
+/* ===== 资源监控（v1.13+） ===== */
+function monitor_data_file() {
+    $dir = __DIR__ . '/data';
+    if (!is_dir($dir)) @mkdir($dir, 0755, true);
+    return $dir . '/monitor_' . preg_replace('/[^A-Za-z0-9_-]/', '_', instance_container()) . '.json';
+}
+function monitor_read() {
+    $f = monitor_data_file();
+    if (!is_file($f)) return array('points' => array(), 'meta' => array('host' => null, 'hostTs' => 0, 'lastSample' => 0, 'lastNet' => null));
+    $d = @json_decode(@file_get_contents($f), true);
+    if (!is_array($d) || !isset($d['points'])) return array('points' => array(), 'meta' => array('host' => null, 'hostTs' => 0, 'lastSample' => 0, 'lastNet' => null));
+    if (!isset($d['meta'])) $d['meta'] = array('host' => null, 'hostTs' => 0, 'lastSample' => 0, 'lastNet' => null);
+    return $d;
+}
+function monitor_write($d) {
+    $f = monitor_data_file();
+    return @file_put_contents($f, json_encode($d, JSON_UNESCAPED_UNICODE)) !== false;
+}
+function monitor_parse_bytes($s) {
+    $s = strtolower(trim($s));
+    if ($s === '') return 0;
+    if (preg_match('/^([\d.]+)\s*([kmgt]?i?b)?$/', $s, $m)) {
+        $v = (float)$m[1];
+        $u = isset($m[2]) ? $m[2] : '';
+        if ($u === '' || $u === 'b') return $v;
+        if ($u === 'kb' || $u === 'kib') return $v * 1024;
+        if ($u === 'mb' || $u === 'mib') return $v * 1024 * 1024;
+        if ($u === 'gb' || $u === 'gib') return $v * 1024 * 1024 * 1024;
+        if ($u === 'tb' || $u === 'tib') return $v * 1024 * 1024 * 1024 * 1024;
+    }
+    return 0;
+}
+function monitor_docker_stats() {
+    $r = run_cmd('docker stats --no-stream --format "{{.CPUPerc}}|{{.MemUsage}}|{{.MemPerc}}|{{.NetIO}}" ' . escapeshellarg(instance_container()) . ' 2>&1');
+    if ($r['code'] !== 0) return null;
+    $parts = explode('|', trim($r['out']));
+    if (count($parts) < 4) return null;
+    $mem = explode('/', $parts[1]);
+    $net = explode('/', $parts[3]);
+    return array(
+        'cpu'      => (float)str_replace('%', '', $parts[0]),
+        'memUsed'  => monitor_parse_bytes(isset($mem[0]) ? $mem[0] : '0'),
+        'memTotal' => monitor_parse_bytes(isset($mem[1]) ? $mem[1] : '0'),
+        'memPct'   => (float)str_replace('%', '', $parts[2]),
+        'netIn'    => monitor_parse_bytes(isset($net[0]) ? $net[0] : '0'),
+        'netOut'   => monitor_parse_bytes(isset($net[1]) ? $net[1] : '0'),
+    );
+}
+function monitor_container_started() {
+    $r = run_cmd('docker inspect -f "{{.State.StartedAt}}" ' . escapeshellarg(instance_container()) . ' 2>&1');
+    $ts = strtotime(trim($r['out']));
+    return ($ts !== false && $ts > 0) ? $ts : 0;
+}
+function monitor_host_info() {
+    $d = monitor_read();
+    if (!empty($d['meta']['host']) && time() - (int)$d['meta']['hostTs'] < 600) return $d['meta']['host'];
+    $host = array('name' => php_uname('n'), 'os' => '', 'docker' => '', 'cores' => 0, 'memTotal' => 0, 'memAvail' => 0, 'diskTotal' => 0, 'diskUsed' => 0);
+    $r = run_cmd('free -b');
+    foreach (explode("\n", $r['out']) as $line) {
+        if (preg_match('/^Mem:\s+(\d+)\s+\d+\s+\d+\s+\d+\s+\d+\s+(\d+)/', $line, $m)) {
+            $host['memTotal'] = (int)$m[1];
+            $host['memAvail'] = (int)$m[2];
+        }
+    }
+    $r = run_cmd('df -B1 /');
+    $lines = explode("\n", trim($r['out']));
+    if (count($lines) >= 2 && preg_match('/^\S+\s+(\d+)\s+(\d+)\s+\d+\s+\d+%/', trim($lines[1]), $m)) {
+        $host['diskTotal'] = (int)$m[1];
+        $host['diskUsed']  = (int)$m[2];
+    }
+    $r = run_cmd('cat /etc/os-release');
+    foreach (explode("\n", $r['out']) as $line) {
+        if (preg_match('/^PRETTY_NAME="?(.*?)"?$/', trim($line), $m)) { $host['os'] = $m[1]; break; }
+    }
+    $r = run_cmd('docker version --format "{{.Server.Version}}" 2>&1');
+    $host['docker'] = trim($r['out']);
+    $r = run_cmd('nproc');
+    $host['cores'] = (int)trim($r['out']);
+    $d['meta']['host'] = $host;
+    $d['meta']['hostTs'] = time();
+    monitor_write($d);
+    return $host;
+}
+function monitor_sample($interval = 5) {
+    $d = monitor_read();
+    $now = time();
+    $iv = max(2, (int)$interval);
+    if ($now - (int)$d['meta']['lastSample'] < $iv) {
+        return array('sampled' => false, 'data' => $d, 'running' => container_is_running());
+    }
+    $running = container_is_running();
+    $started = $running ? monitor_container_started() : 0;
+    $p = array('t' => $now, 'cpu' => 0.0, 'mem' => 0.0, 'disk' => 0.0, 'netIn' => 0.0, 'netOut' => 0.0, 'load' => 0.0, 'uptime' => 0);
+    if ($running) {
+        $t0 = microtime(true);
+        $s1 = monitor_docker_stats();
+        if ($s1 !== null) usleep(400000);
+        $s2 = monitor_docker_stats();
+        $t1 = microtime(true);
+        if ($s1 !== null && $s2 !== null) {
+            // 瞬时 CPU：docker stats 单次输出是容器启动以来平均值，用两次快照差值换算
+            $wall1 = $started > 0 ? $t0 - $started : 0;
+            $wall2 = $started > 0 ? $t1 - $started : 0;
+            if ($wall1 > 1 && $wall2 > $wall1) {
+                $cpu1 = $s1['cpu'] / 100.0 * $wall1;
+                $cpu2 = $s2['cpu'] / 100.0 * $wall2;
+                $p['cpu'] = max(0.0, ($cpu2 - $cpu1) / ($wall2 - $wall1) * 100.0);
+            } else {
+                $p['cpu'] = $s2['cpu'];
+            }
+            $p['mem']  = $s2['memPct'];
+            $p['uptime'] = $started > 0 ? max(0, (int)($t1 - $started)) : 0;
+            $lastNet = isset($d['meta']['lastNet']) ? $d['meta']['lastNet'] : null;
+            $dt = $now - (int)$d['meta']['lastSample'];
+            if ($lastNet !== null && $dt > 0) {
+                $p['netIn']  = max(0.0, ($s2['netIn']  - $lastNet['in'])  / $dt);
+                $p['netOut'] = max(0.0, ($s2['netOut'] - $lastNet['out']) / $dt);
+            }
+            $d['meta']['lastNet'] = array('in' => $s2['netIn'], 'out' => $s2['netOut']);
+        } else {
+            $d['meta']['lastNet'] = null;
+        }
+    } else {
+        $d['meta']['lastNet'] = null;
+    }
+    $la = @file_get_contents('/proc/loadavg');
+    if ($la !== false && preg_match('/^([\d.]+)\s+([\d.]+)\s+([\d.]+)/', $la, $m)) {
+        $p['load'] = (float)$m[1];
+    }
+    $r = run_cmd('df -B1 /');
+    $lines = explode("\n", trim($r['out']));
+    if (count($lines) >= 2 && preg_match('/^\S+\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)%/', trim($lines[1]), $m)) {
+        $p['disk'] = (int)$m[4];
+    }
+    $d['points'][] = $p;
+    if (count($d['points']) > 360) $d['points'] = array_slice($d['points'], -360);
+    $d['meta']['lastSample'] = $now;
+    monitor_write($d);
+    return array('sampled' => true, 'data' => $d, 'running' => $running);
+}
+function monitor_interval() {
+    $cfg = panel_config_load();
+    return isset($cfg['monitor_interval']) ? max(2, (int)$cfg['monitor_interval']) : 5;
+}
+
 /* ===== AJAX 请求 ===== */
 if (isset($_GET['ajax']) && is_auth()) {
     $ajax = $_GET['ajax'];
@@ -937,6 +1082,40 @@ if (isset($_GET['ajax']) && is_auth()) {
         echo json_encode(image_check(!empty($_GET['force'])), JSON_UNESCAPED_UNICODE);
         exit;
     }
+    if ($ajax === 'monitor') {
+        header('Content-Type: application/json; charset=utf-8');
+        $iv = isset($_GET['iv']) ? max(2, (int)$_GET['iv']) : monitor_interval();
+        $r = monitor_sample($iv);
+        $d = $r['data'];
+        echo json_encode(array(
+            'ok'      => true,
+            'sampled' => $r['sampled'],
+            'running' => $r['running'],
+            'points'  => isset($d['points']) ? $d['points'] : array(),
+            'host'    => isset($d['meta']['host']) ? $d['meta']['host'] : monitor_host_info(),
+            'lastSample' => isset($d['meta']['lastSample']) ? (int)$d['meta']['lastSample'] : 0,
+            'interval'   => $iv,
+        ), JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    exit;
+}
+
+/* ===== 资源监控：计划任务采样接口（宝塔 crontab 用，需带 key） ===== */
+if (isset($_GET['monitor_sampler']) && $_GET['monitor_sampler'] === '1') {
+    $cfg = panel_config_load();
+    $key = isset($cfg['monitor_key']) ? $cfg['monitor_key'] : '';
+    if ($key === '') {
+        $key = bin2hex(random_bytes(8));
+        panel_config_save(array('monitor_key' => $key));
+    }
+    header('Content-Type: application/json; charset=utf-8');
+    if (($_GET['key'] ?? '') !== $key) {
+        echo json_encode(array('ok' => false, 'msg' => 'invalid key'), JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $r = monitor_sample(60);
+    echo json_encode(array('ok' => true, 'sampled' => $r['sampled'], 'running' => $r['running'], 'points' => count($r['data']['points'])), JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -1162,6 +1341,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $mode = ($_POST['mode'] ?? '') === 'manual' ? 'manual' : 'auto';
             if (panel_config_save(array('update_mode' => $mode))) {
                 echo json_encode(array('ok' => true, 'msg' => '更新模式已切换为「' . ($mode === 'manual' ? '手动更新' : '自动检查') . '」'), JSON_UNESCAPED_UNICODE);
+            } else {
+                echo json_encode(array('ok' => false, 'msg' => '写入面板配置失败，请检查 .panel_config.php 权限'), JSON_UNESCAPED_UNICODE);
+            }
+            exit;
+        }
+        // 资源监控：采样间隔设置（v1.13+）
+        elseif ($action === 'set_monitor_interval') {
+            $iv = max(2, min(3600, (int)($_POST['interval'] ?? 5)));
+            if (panel_config_save(array('monitor_interval' => $iv))) {
+                echo json_encode(array('ok' => true, 'msg' => '采样间隔已设置为 ' . $iv . ' 秒，曲线按新频率刷新'), JSON_UNESCAPED_UNICODE);
             } else {
                 echo json_encode(array('ok' => false, 'msg' => '写入面板配置失败，请检查 .panel_config.php 权限'), JSON_UNESCAPED_UNICODE);
             }
@@ -1469,6 +1658,25 @@ html[data-theme="light"] .card { background:var(--card); }
   white-space:pre-wrap; word-break:break-all; max-height:440px; overflow:auto; color:var(--text);
 }
 
+/* ===== 资源监控（v1.13+） ===== */
+.mon-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:12px; }
+.mon-stat { background:var(--card2); border:1px solid var(--border); border-radius:12px; padding:14px 12px; text-align:center; transition:all .2s; }
+.mon-stat .m-label { font-size:12px; color:var(--muted); margin-bottom:6px; }
+.mon-stat .m-value { font-size:22px; font-weight:800; line-height:1.2; }
+.mon-stat .m-sub { font-size:11px; color:var(--muted); margin-top:5px; }
+.mon-stat .m-bar { height:5px; border-radius:3px; background:var(--card-solid); margin-top:9px; overflow:hidden; }
+.mon-stat .m-bar > i { display:block; height:100%; border-radius:3px; background:var(--grad); transition:width .6s ease; }
+.mon-stat.warn .m-value { color:var(--orange); }
+.mon-stat.danger .m-value { color:var(--red); }
+.mon-legend { display:flex; gap:14px; font-size:12px; color:var(--muted); margin-bottom:8px; flex-wrap:wrap; }
+.mon-legend .lg { display:inline-flex; align-items:center; gap:5px; }
+.mon-legend .dot { width:9px; height:9px; border-radius:3px; display:inline-block; }
+.mon-chart { width:100%; height:260px; background:var(--card2); border:1px solid var(--border); border-radius:12px; padding:8px; margin-bottom:10px; box-sizing:border-box; }
+.mon-host { display:flex; flex-wrap:wrap; gap:8px 18px; font-size:12px; color:var(--muted); padding:10px 2px 0; border-top:1px solid var(--border); }
+.mon-host-row { display:flex; gap:6px; align-items:center; }
+.mon-host b { color:var(--text); font-weight:600; }
+#monChart code, .mon-tip code { background:var(--card2); border:1px solid var(--border); padding:2px 6px; border-radius:6px; font-size:11px; }
+
 /* ===== 任务卡片 ===== */
 .task-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:12px; }
 .task-card {
@@ -1766,6 +1974,43 @@ html[data-theme="light"] .card { background:var(--card); }
       <div class="card">
         <h2><span class="icon">📦</span> 容器状态 <button class="btn small gray" onclick="refreshStatus()" style="margin-left:auto;">刷新</button></h2>
         <div class="codebox" id="statusBox"><?php $st = container_status(); echo $st === '' ? '(无法获取，请检查 www 用户 docker 权限)' : h($st); ?></div>
+      </div>
+
+      <div class="card">
+        <?php
+        $_monCfg = panel_config_load();
+        if (empty($_monCfg['monitor_key'])) {
+            $_monCfg['monitor_key'] = bin2hex(random_bytes(8));
+            panel_config_save(array('monitor_key' => $_monCfg['monitor_key']));
+        }
+        $_monScheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+        $_monBase = $_monScheme . '://' . ($_SERVER['HTTP_HOST'] ?? 'localhost') . rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? '/'), '/\\');
+        $_monCron = 'curl -s "' . $_monBase . '/index.php?monitor_sampler=1&key=' . $_monCfg['monitor_key'] . '" >/dev/null 2>&1';
+        $_monIv = isset($_monCfg['monitor_interval']) ? max(2, (int)$_monCfg['monitor_interval']) : 5;
+        ?>
+        <h2><span class="icon">📈</span> 资源监控
+          <span class="badge" id="monLiveBadge" style="background:var(--green,#22c55e);color:#fff;">实时</span>
+          <select id="monInterval" onchange="setMonitorInterval(this.value)" style="margin-left:auto;font-size:12px;padding:4px 8px;border-radius:8px;border:1px solid var(--border);background:var(--card2);color:var(--text);">
+            <option value="2"<?php echo $_monIv === 2 ? ' selected' : ''; ?>>2秒</option>
+            <option value="5"<?php echo $_monIv === 5 ? ' selected' : ''; ?>>5秒</option>
+            <option value="10"<?php echo $_monIv === 10 ? ' selected' : ''; ?>>10秒</option>
+            <option value="30"<?php echo $_monIv === 30 ? ' selected' : ''; ?>>30秒</option>
+            <option value="60"<?php echo $_monIv === 60 ? ' selected' : ''; ?>>60秒</option>
+          </select>
+          <button class="btn small gray" onclick="loadMonitor(true)" style="margin-left:8px;">立即刷新</button>
+        </h2>
+        <div class="mon-grid">
+          <div class="mon-stat" id="monCpu"><div class="m-label">CPU 使用率</div><div class="m-value">--</div><div class="m-bar"><i style="width:0%"></i></div></div>
+          <div class="mon-stat" id="monMem"><div class="m-label">内存使用率</div><div class="m-value">--</div><div class="m-bar"><i style="width:0%"></i></div></div>
+          <div class="mon-stat" id="monDisk"><div class="m-label">磁盘使用率</div><div class="m-value">--</div><div class="m-bar"><i style="width:0%"></i></div></div>
+          <div class="mon-stat" id="monLoad"><div class="m-label">系统负载</div><div class="m-value">--</div><div class="m-sub">1分钟均值</div></div>
+          <div class="mon-stat" id="monNet"><div class="m-label">网络速率</div><div class="m-value" style="font-size:16px;">--</div><div class="m-sub" id="monNetSub">↓下载 ↑上传</div></div>
+          <div class="mon-stat" id="monUp"><div class="m-label">运行时长</div><div class="m-value" style="font-size:16px;">--</div><div class="m-sub" id="monUpSub">容器状态：检测中…</div></div>
+        </div>
+        <div class="mon-legend"><span class="lg"><span class="dot" style="background:#ec4899;"></span>CPU</span><span class="lg"><span class="dot" style="background:#38bdf8;"></span>内存</span><span class="lg"><span class="dot" style="background:#f59e0b;"></span>磁盘</span></div>
+        <div class="mon-chart" id="monChart"><div style="text-align:center;color:var(--muted);padding-top:110px;font-size:13px;">图表加载中…（首次采样约需 1 秒）</div></div>
+        <div class="mon-host" id="monHost"></div>
+        <p class="tip mon-tip" style="margin:10px 0 0;">实时采样：打开面板时每 <span id="monIvText"><?php echo $_monIv; ?></span> 秒自动采样；想不打开面板也有曲线，在宝塔「计划任务」添加 Shell 脚本每 1 分钟执行：<code id="monCronCmd"><?php echo h($_monCron); ?></code></p>
       </div>
 
       <div class="card">
@@ -2310,6 +2555,143 @@ function setAfterFinish(v) {
     }).catch(function(){ alert('❌ 网络错误'); });
 }
 
+/* ===== 资源监控（v1.13+） ===== */
+var _monChart = null;
+var _monTimer = null;
+function loadECharts(cb) {
+  if (window.echarts) { if (cb) cb(); return; }
+  var urls = [
+    'https://cdn.bootcdn.net/ajax/libs/echarts/5.4.3/echarts.min.js',
+    'https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js'
+  ];
+  var i = 0;
+  function tryNext() {
+    if (i >= urls.length) {
+      var box = document.getElementById('monChart');
+      if (box) box.innerHTML = '<div style="text-align:center;color:var(--muted);padding-top:110px;font-size:13px;">⚠️ 图表库加载失败（需外网 CDN），上方数字指标仍可用</div>';
+      return;
+    }
+    var s = document.createElement('script');
+    s.src = urls[i++];
+    s.onload = function(){ if (cb) cb(); };
+    s.onerror = tryNext;
+    document.head.appendChild(s);
+  }
+  tryNext();
+}
+function fmtBytes(b) {
+  if (b >= 1024*1024*1024) return (b/1024/1024/1024).toFixed(1) + 'G';
+  if (b >= 1024*1024) return (b/1024/1024).toFixed(1) + 'M';
+  if (b >= 1024) return (b/1024).toFixed(1) + 'K';
+  return b.toFixed(0) + 'B';
+}
+function fmtSpeed(bps) { return fmtBytes(bps) + '/s'; }
+function fmtUptime(sec) {
+  if (!sec || sec <= 0) return '--';
+  var d = Math.floor(sec/86400), h = Math.floor(sec%86400/3600), m = Math.floor(sec%3600/60);
+  if (d > 0) return d + '天' + h + '小时';
+  if (h > 0) return h + '小时' + m + '分';
+  return m + '分钟';
+}
+function setMonStat(id, val, pct, cls) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  el.className = 'mon-stat' + (cls ? ' ' + cls : '');
+  var v = el.querySelector('.m-value'); if (v) v.textContent = val;
+  var bar = el.querySelector('.m-bar > i'); if (bar) bar.style.width = (pct || 0) + '%';
+}
+function renderMonitor(d) {
+  var pts = d.points || [];
+  var last = pts.length ? pts[pts.length-1] : null;
+  if (last) {
+    var cpuCls = last.cpu > 80 ? 'danger' : (last.cpu > 60 ? 'warn' : '');
+    var memCls = last.mem > 80 ? 'danger' : (last.mem > 60 ? 'warn' : '');
+    var diskCls = last.disk > 80 ? 'danger' : (last.disk > 60 ? 'warn' : '');
+    setMonStat('monCpu', (last.cpu||0).toFixed(1) + '%', last.cpu, cpuCls);
+    setMonStat('monMem', (last.mem||0).toFixed(1) + '%', last.mem, memCls);
+    setMonStat('monDisk', (last.disk||0).toFixed(1) + '%', last.disk, diskCls);
+    document.getElementById('monLoad').querySelector('.m-value').textContent = (last.load||0).toFixed(2);
+    document.getElementById('monNet').querySelector('.m-value').textContent = '↓' + fmtSpeed(last.netIn||0);
+    document.getElementById('monNetSub').textContent = '↑' + fmtSpeed(last.netOut||0);
+    document.getElementById('monUp').querySelector('.m-value').textContent = fmtUptime(last.uptime||0);
+    document.getElementById('monUpSub').textContent = d.running ? '容器：运行中' : '容器：已停止';
+  }
+  var h = d.host || {};
+  var hostEl = document.getElementById('monHost');
+  if (hostEl && (h.name || h.os)) {
+    hostEl.innerHTML =
+      '<span class="mon-host-row">💻 <b>' + escapeHtml(h.name || '') + '</b></span>' +
+      '<span class="mon-host-row">系统 <b>' + escapeHtml(h.os || '--') + '</b></span>' +
+      '<span class="mon-host-row">Docker <b>' + escapeHtml(h.docker || '--') + '</b></span>' +
+      '<span class="mon-host-row">核心 <b>' + (h.cores || '--') + '</b></span>' +
+      '<span class="mon-host-row">内存 <b>' + fmtBytes(h.memTotal||0) + '</b></span>' +
+      '<span class="mon-host-row">磁盘 <b>' + fmtBytes(h.diskUsed||0) + ' / ' + fmtBytes(h.diskTotal||0) + '</b></span>';
+  }
+  if (window.echarts) {
+    if (!_monChart) {
+      var box = document.getElementById('monChart');
+      if (box) { box.innerHTML = ''; _monChart = echarts.init(box); }
+    }
+    if (_monChart) {
+      var times = pts.map(function(p){ return new Date(p.t*1000).toLocaleTimeString('zh-CN', {hour12:false}); });
+      _monChart.setOption({
+        tooltip: { trigger: 'axis' },
+        legend: { data: ['CPU','内存','磁盘'], textStyle:{color:'#999'}, top:0 },
+        grid: { left:42, right:16, top:34, bottom:26 },
+        xAxis: { type:'category', data:times, boundaryGap:false, axisLine:{lineStyle:{color:'#999'}}, axisLabel:{color:'#999', fontSize:10} },
+        yAxis: { type:'value', max:100, axisLabel:{formatter:'{value}%', color:'#999', fontSize:10}, splitLine:{lineStyle:{color:'rgba(128,128,128,.15)'}} },
+        series: [
+          { name:'CPU', type:'line', smooth:true, showSymbol:false, data:pts.map(function(p){return +(p.cpu||0).toFixed(1);}), lineStyle:{width:2,color:'#ec4899'}, itemStyle:{color:'#ec4899'}, areaStyle:{opacity:.08} },
+          { name:'内存', type:'line', smooth:true, showSymbol:false, data:pts.map(function(p){return +(p.mem||0).toFixed(1);}), lineStyle:{width:2,color:'#38bdf8'}, itemStyle:{color:'#38bdf8'}, areaStyle:{opacity:.08} },
+          { name:'磁盘', type:'line', smooth:true, showSymbol:false, data:pts.map(function(p){return +(p.disk||0).toFixed(1);}), lineStyle:{width:2,color:'#f59e0b'}, itemStyle:{color:'#f59e0b'}, areaStyle:{opacity:.08} }
+        ]
+      });
+    }
+  }
+}
+function loadMonitor() {
+  var iv = parseInt(document.getElementById('monInterval').value) || 5;
+  fetch('?ajax=monitor&iv=' + iv)
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (!d || !d.ok) return;
+      renderMonitor(d);
+      var badge = document.getElementById('monLiveBadge');
+      if (badge) {
+        badge.textContent = d.running ? '实时' : '容器已停止';
+        badge.style.background = d.running ? 'var(--green,#22c55e)' : 'var(--gray,#9ca3af)';
+      }
+    }).catch(function(){});
+}
+function startMonitor() {
+  stopMonitor();
+  loadMonitor();
+  var iv = parseInt(document.getElementById('monInterval').value) || 5;
+  _monTimer = setInterval(loadMonitor, Math.max(2, iv) * 1000);
+}
+function stopMonitor() {
+  if (_monTimer) { clearInterval(_monTimer); _monTimer = null; }
+}
+function setMonitorInterval(iv) {
+  var fd = new FormData();
+  fd.append('action', 'set_monitor_interval');
+  fd.append('interval', iv);
+  var csrf = document.querySelector('input[name="csrf"]');
+  if (csrf) fd.append('csrf', csrf.value);
+  fetch('index.php', { method:'POST', body: fd })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d && d.ok) {
+        alert('✅ ' + d.msg);
+        var t = document.getElementById('monIvText');
+        if (t) t.textContent = iv;
+        startMonitor();
+      } else {
+        alert('❌ ' + (d && d.msg ? d.msg : '设置失败'));
+      }
+    }).catch(function(){ alert('❌ 网络错误'); });
+}
+
 /* ===== AJAX 刷新 ===== */
 var _logTimer = null;
 var _statusTimer = null;
@@ -2424,6 +2806,8 @@ refreshStatus();
 refreshLog();
 startAutoRefresh();
 initLogExport();
+loadECharts(function(){ loadMonitor(); });
+startMonitor();
 
 /* ===== 保存并重启 ===== */
 function restartAfterSave() {
