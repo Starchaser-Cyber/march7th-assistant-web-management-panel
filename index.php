@@ -19,7 +19,7 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.13');           // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.13.1');           // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -883,10 +883,11 @@ function monitor_data_file() {
 }
 function monitor_read() {
     $f = monitor_data_file();
-    if (!is_file($f)) return array('points' => array(), 'meta' => array('host' => null, 'hostTs' => 0, 'lastSample' => 0, 'lastNet' => null));
+    if (!is_file($f)) return array('points' => array(), 'minutes' => array(), 'meta' => array('host' => null, 'hostTs' => 0, 'lastSample' => 0, 'lastMin' => 0, 'lastNet' => null));
     $d = @json_decode(@file_get_contents($f), true);
-    if (!is_array($d) || !isset($d['points'])) return array('points' => array(), 'meta' => array('host' => null, 'hostTs' => 0, 'lastSample' => 0, 'lastNet' => null));
-    if (!isset($d['meta'])) $d['meta'] = array('host' => null, 'hostTs' => 0, 'lastSample' => 0, 'lastNet' => null);
+    if (!is_array($d) || !isset($d['points'])) return array('points' => array(), 'minutes' => array(), 'meta' => array('host' => null, 'hostTs' => 0, 'lastSample' => 0, 'lastMin' => 0, 'lastNet' => null));
+    if (!isset($d['meta'])) $d['meta'] = array('host' => null, 'hostTs' => 0, 'lastSample' => 0, 'lastMin' => 0, 'lastNet' => null);
+    if (!isset($d['minutes'])) $d['minutes'] = array();
     return $d;
 }
 function monitor_write($d) {
@@ -958,10 +959,10 @@ function monitor_host_info() {
     monitor_write($d);
     return $host;
 }
-function monitor_sample($interval = 5) {
+function monitor_sample($interval = 1) {
     $d = monitor_read();
     $now = time();
-    $iv = max(2, (int)$interval);
+    $iv = max(1, (int)$interval);
     if ($now - (int)$d['meta']['lastSample'] < $iv) {
         return array('sampled' => false, 'data' => $d, 'running' => container_is_running());
     }
@@ -1010,14 +1011,33 @@ function monitor_sample($interval = 5) {
         $p['disk'] = (int)$m[4];
     }
     $d['points'][] = $p;
-    if (count($d['points']) > 360) $d['points'] = array_slice($d['points'], -360);
+    if (count($d['points']) > 3600) $d['points'] = array_slice($d['points'], -3600);
+    // 分钟级聚合：跨分钟时取最近 60 秒平均值，保留最近 1440 点（24 小时）
+    $min = (int)floor($now / 60);
+    if ($min != (int)$d['meta']['lastMin']) {
+        $cut = $now - 60;
+        $sCpu = 0.0; $sMem = 0.0; $sDisk = 0.0; $cnt = 0;
+        foreach ($d['points'] as $pp) {
+            if ($pp['t'] >= $cut) { $sCpu += $pp['cpu']; $sMem += $pp['mem']; $sDisk += $pp['disk']; $cnt++; }
+        }
+        if ($cnt > 0) {
+            $d['minutes'][] = array(
+                't'    => $min * 60,
+                'cpu'  => round($sCpu / $cnt, 1),
+                'mem'  => round($sMem / $cnt, 1),
+                'disk' => round($sDisk / $cnt, 1),
+            );
+            if (count($d['minutes']) > 1440) $d['minutes'] = array_slice($d['minutes'], -1440);
+        }
+        $d['meta']['lastMin'] = $min;
+    }
     $d['meta']['lastSample'] = $now;
     monitor_write($d);
     return array('sampled' => true, 'data' => $d, 'running' => $running);
 }
 function monitor_interval() {
     $cfg = panel_config_load();
-    return isset($cfg['monitor_interval']) ? max(2, (int)$cfg['monitor_interval']) : 5;
+    return isset($cfg['monitor_interval']) ? max(1, (int)$cfg['monitor_interval']) : 1;
 }
 
 /* ===== AJAX 请求 ===== */
@@ -1084,7 +1104,7 @@ if (isset($_GET['ajax']) && is_auth()) {
     }
     if ($ajax === 'monitor') {
         header('Content-Type: application/json; charset=utf-8');
-        $iv = isset($_GET['iv']) ? max(2, (int)$_GET['iv']) : monitor_interval();
+        $iv = isset($_GET['iv']) ? max(1, (int)$_GET['iv']) : monitor_interval();
         $r = monitor_sample($iv);
         $d = $r['data'];
         echo json_encode(array(
@@ -1092,6 +1112,7 @@ if (isset($_GET['ajax']) && is_auth()) {
             'sampled' => $r['sampled'],
             'running' => $r['running'],
             'points'  => isset($d['points']) ? $d['points'] : array(),
+            'minutes' => isset($d['minutes']) ? $d['minutes'] : array(),
             'host'    => isset($d['meta']['host']) ? $d['meta']['host'] : monitor_host_info(),
             'lastSample' => isset($d['meta']['lastSample']) ? (int)$d['meta']['lastSample'] : 0,
             'interval'   => $iv,
@@ -1329,7 +1350,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $bak = config_backup();
             $r = config_save_form(array('after_finish' => yaml_format_val($val, 'str')));
             if ($r['ok']) {
-                $tip = $val === 'Exit' ? '已开启「跑完自动退出游戏」，任务跑完自动退出，下次进入从主界面开始' : '已切换为「跑完保持界面」，任务跑完停在最后界面（可能是模拟宇宙）';
+                $tip = $val === 'Exit' ? '已开启「跑完自动退出游戏」，任务跑完自动退出，下次进入从主界面开始' : '已切换为「跑完保持界面」，任务跑完停在最后界面';
                 $msg = $tip . '（备份：' . ($bak ? basename($bak) : '无') . '）。下次运行任务时生效。';
                 echo json_encode(array('ok' => true, 'msg' => $msg), JSON_UNESCAPED_UNICODE);
             } else {
@@ -1348,7 +1369,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         // 资源监控：采样间隔设置（v1.13+）
         elseif ($action === 'set_monitor_interval') {
-            $iv = max(2, min(3600, (int)($_POST['interval'] ?? 5)));
+            $iv = max(1, min(3600, (int)($_POST['interval'] ?? 1)));
             if (panel_config_save(array('monitor_interval' => $iv))) {
                 echo json_encode(array('ok' => true, 'msg' => '采样间隔已设置为 ' . $iv . ' 秒，曲线按新频率刷新'), JSON_UNESCAPED_UNICODE);
             } else {
@@ -1660,6 +1681,9 @@ html[data-theme="light"] .card { background:var(--card); }
 
 /* ===== 资源监控（v1.13+） ===== */
 .mon-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin-bottom:12px; }
+.mon-range { display:inline-flex; gap:4px; margin-left:10px; }
+.mon-range .btn { font-size:11px; padding:4px 9px; border-radius:8px; border:1px solid var(--border); background:var(--card2); color:var(--muted); cursor:pointer; }
+.mon-range .btn.active { background:var(--grad); color:#fff; border-color:transparent; }
 .mon-stat { background:var(--card2); border:1px solid var(--border); border-radius:12px; padding:14px 12px; text-align:center; transition:all .2s; }
 .mon-stat .m-label { font-size:12px; color:var(--muted); margin-bottom:6px; }
 .mon-stat .m-value { font-size:22px; font-weight:800; line-height:1.2; }
@@ -1986,11 +2010,17 @@ html[data-theme="light"] .card { background:var(--card); }
         $_monScheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
         $_monBase = $_monScheme . '://' . ($_SERVER['HTTP_HOST'] ?? 'localhost') . rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? '/'), '/\\');
         $_monCron = 'curl -s "' . $_monBase . '/index.php?monitor_sampler=1&key=' . $_monCfg['monitor_key'] . '" >/dev/null 2>&1';
-        $_monIv = isset($_monCfg['monitor_interval']) ? max(2, (int)$_monCfg['monitor_interval']) : 5;
+        $_monIv = isset($_monCfg['monitor_interval']) ? max(1, (int)$_monCfg['monitor_interval']) : 1;
         ?>
         <h2><span class="icon">📈</span> 资源监控
           <span class="badge" id="monLiveBadge" style="background:var(--green,#22c55e);color:#fff;">实时</span>
+          <span class="mon-range">
+            <button type="button" class="btn small" data-range="1m" onclick="setMonRange('1m')">近1分钟</button>
+            <button type="button" class="btn small active" data-range="1h" onclick="setMonRange('1h')">近1小时</button>
+            <button type="button" class="btn small" data-range="1d" onclick="setMonRange('1d')">近1天</button>
+          </span>
           <select id="monInterval" onchange="setMonitorInterval(this.value)" style="margin-left:auto;font-size:12px;padding:4px 8px;border-radius:8px;border:1px solid var(--border);background:var(--card2);color:var(--text);">
+            <option value="1"<?php echo $_monIv === 1 ? ' selected' : ''; ?>>1秒</option>
             <option value="2"<?php echo $_monIv === 2 ? ' selected' : ''; ?>>2秒</option>
             <option value="5"<?php echo $_monIv === 5 ? ' selected' : ''; ?>>5秒</option>
             <option value="10"<?php echo $_monIv === 10 ? ' selected' : ''; ?>>10秒</option>
@@ -2028,7 +2058,7 @@ html[data-theme="light"] .card { background:var(--card); }
           <button type="button" class="btn primary" onclick="setAfterFinish('Exit')">🚪 跑完自动退出游戏</button>
           <button type="button" class="btn gray" onclick="setAfterFinish('None')">🖥️ 跑完保持界面</button>
         </div>
-        <p class="tip" style="margin:10px 0 0;">开启「自动退出」后任务全部跑完会自动退出游戏，下次进入从主界面开始，不再停在模拟宇宙界面。当前状态：<strong id="afterFinishVal"><?php echo $afVal === 'Exit' ? '跑完自动退出游戏' : '跑完保持界面（会停在模拟宇宙等最后界面）'; ?></strong>，下次运行任务时生效。</p>
+        <p class="tip" style="margin:10px 0 0;">开启「自动退出」后任务全部跑完会自动退出游戏，下次进入从主界面开始，不再停在模拟宇宙界面。当前状态：<strong id="afterFinishVal"><?php echo $afVal === 'Exit' ? '跑完自动退出游戏' : '跑完保持界面'; ?></strong>，下次运行任务时生效。</p>
       </div>
 
       <div class="card">
@@ -2546,7 +2576,7 @@ function setAfterFinish(v) {
           if (valEl) valEl.textContent = '跑完自动退出游戏';
           if (badge) { badge.textContent = '自动退出'; badge.style.background = 'var(--green,#22c55e)'; badge.style.color = '#fff'; }
         } else {
-          if (valEl) valEl.textContent = '跑完保持界面（会停在模拟宇宙等最后界面）';
+          if (valEl) valEl.textContent = '跑完保持界面';
           if (badge) { badge.textContent = '保持界面'; badge.style.background = 'var(--gray,#9ca3af)'; badge.style.color = '#fff'; }
         }
       } else {
@@ -2558,6 +2588,7 @@ function setAfterFinish(v) {
 /* ===== 资源监控（v1.13+） ===== */
 var _monChart = null;
 var _monTimer = null;
+var _monRange = '1h';
 function loadECharts(cb) {
   if (window.echarts) { if (cb) cb(); return; }
   var urls = [
@@ -2633,7 +2664,12 @@ function renderMonitor(d) {
       if (box) { box.innerHTML = ''; _monChart = echarts.init(box); }
     }
     if (_monChart) {
-      var times = pts.map(function(p){ return new Date(p.t*1000).toLocaleTimeString('zh-CN', {hour12:false}); });
+      var now = Math.floor(Date.now()/1000);
+      var pts2 = pts, timeFmt = {hour12:false};
+      if (_monRange === '1m') { pts2 = pts.filter(function(p){ return now - p.t <= 60; }); }
+      else if (_monRange === '1h') { pts2 = pts.filter(function(p){ return now - p.t <= 3600; }); }
+      else if (_monRange === '1d') { pts2 = d.minutes || []; timeFmt = {hour12:false, hour:'2-digit', minute:'2-digit'}; }
+      var times = pts2.map(function(p){ return new Date(p.t*1000).toLocaleTimeString('zh-CN', timeFmt); });
       _monChart.setOption({
         tooltip: { trigger: 'axis' },
         legend: { data: ['CPU','内存','磁盘'], textStyle:{color:'#999'}, top:0 },
@@ -2641,16 +2677,24 @@ function renderMonitor(d) {
         xAxis: { type:'category', data:times, boundaryGap:false, axisLine:{lineStyle:{color:'#999'}}, axisLabel:{color:'#999', fontSize:10} },
         yAxis: { type:'value', max:100, axisLabel:{formatter:'{value}%', color:'#999', fontSize:10}, splitLine:{lineStyle:{color:'rgba(128,128,128,.15)'}} },
         series: [
-          { name:'CPU', type:'line', smooth:true, showSymbol:false, data:pts.map(function(p){return +(p.cpu||0).toFixed(1);}), lineStyle:{width:2,color:'#ec4899'}, itemStyle:{color:'#ec4899'}, areaStyle:{opacity:.08} },
-          { name:'内存', type:'line', smooth:true, showSymbol:false, data:pts.map(function(p){return +(p.mem||0).toFixed(1);}), lineStyle:{width:2,color:'#38bdf8'}, itemStyle:{color:'#38bdf8'}, areaStyle:{opacity:.08} },
-          { name:'磁盘', type:'line', smooth:true, showSymbol:false, data:pts.map(function(p){return +(p.disk||0).toFixed(1);}), lineStyle:{width:2,color:'#f59e0b'}, itemStyle:{color:'#f59e0b'}, areaStyle:{opacity:.08} }
+          { name:'CPU', type:'line', smooth:true, showSymbol:false, data:pts2.map(function(p){return +(p.cpu||0).toFixed(1);}), lineStyle:{width:2,color:'#ec4899'}, itemStyle:{color:'#ec4899'}, areaStyle:{opacity:.08} },
+          { name:'内存', type:'line', smooth:true, showSymbol:false, data:pts2.map(function(p){return +(p.mem||0).toFixed(1);}), lineStyle:{width:2,color:'#38bdf8'}, itemStyle:{color:'#38bdf8'}, areaStyle:{opacity:.08} },
+          { name:'磁盘', type:'line', smooth:true, showSymbol:false, data:pts2.map(function(p){return +(p.disk||0).toFixed(1);}), lineStyle:{width:2,color:'#f59e0b'}, itemStyle:{color:'#f59e0b'}, areaStyle:{opacity:.08} }
         ]
       });
     }
   }
 }
+function setMonRange(r) {
+  _monRange = r;
+  var btns = document.querySelectorAll('.mon-range .btn');
+  for (var i = 0; i < btns.length; i++) {
+    btns[i].className = 'btn small' + (btns[i].getAttribute('data-range') === r ? ' active' : '');
+  }
+  loadMonitor(true);
+}
 function loadMonitor() {
-  var iv = parseInt(document.getElementById('monInterval').value) || 5;
+  var iv = parseInt(document.getElementById('monInterval').value) || 1;
   fetch('?ajax=monitor&iv=' + iv)
     .then(function(r){ return r.json(); })
     .then(function(d){
@@ -2666,8 +2710,8 @@ function loadMonitor() {
 function startMonitor() {
   stopMonitor();
   loadMonitor();
-  var iv = parseInt(document.getElementById('monInterval').value) || 5;
-  _monTimer = setInterval(loadMonitor, Math.max(2, iv) * 1000);
+  var iv = parseInt(document.getElementById('monInterval').value) || 1;
+  _monTimer = setInterval(loadMonitor, Math.max(1, iv) * 1000);
 }
 function stopMonitor() {
   if (_monTimer) { clearInterval(_monTimer); _monTimer = null; }
