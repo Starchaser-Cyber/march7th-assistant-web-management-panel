@@ -19,7 +19,7 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.9');            // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.10');           // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -40,7 +40,7 @@ $TASKS = array(
 );
 $OPS = array(
     'restart' => array('label' => '重启容器', 'desc' => 'docker compose restart', 'icon' => '🔄', 'confirm' => '确定重启容器？'),
-    'stop_task' => array('label' => '停止当前任务', 'desc' => '终止容器内正在运行的任务', 'icon' => '⏹️', 'confirm' => '确定停止当前正在运行的任务？'),
+    'stop_task' => array('label' => '停止任务（重启容器）', 'desc' => '任务进程即容器主进程（PID 1），停止任务会重启容器', 'icon' => '⏹️', 'confirm' => '任务进程即容器主进程，停止任务将重启容器，确定继续？'),
 );
 
 /* ===== 配置字段定义 ===== */
@@ -1113,14 +1113,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exit;
         }
         elseif ($action === 'stop_task') {
-            $r = run_cmd('docker exec ' . escapeshellarg(instance_container()) . ' pkill -15 -f "python main.py"');
-            $out = trim($r['out']);
+            // v1.10：小助手任务进程即容器主进程（PID 1），Linux 下 PID 1 默认忽略 SIGTERM，
+            // 旧方案 pkill -15 无法生效；停止任务只能通过重启容器实现
+            $r = compose('restart');
             if ($r['code'] === 0) {
-                $msg = '⏹️ 已发送停止信号，任务正在终止';
-            } elseif (stripos($out, 'not found') !== false || stripos($out, 'No such file') !== false) {
-                $err = '容器内缺少 pkill 命令，无法停止任务';
+                $msg = '⏹️ 任务已停止（容器已重启），如需继续请重新启动任务';
             } else {
-                $msg = '当前没有检测到运行中的任务';
+                $err = '容器重启失败：' . $r['out'];
             }
         }
         elseif ($action === 'set_update_mode') {
