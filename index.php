@@ -2010,7 +2010,7 @@ html[data-theme="light"] .card { background:var(--card); }
         <div class="mon-legend"><span class="lg"><span class="dot" style="background:#ec4899;"></span>CPU</span><span class="lg"><span class="dot" style="background:#38bdf8;"></span>内存</span><span class="lg"><span class="dot" style="background:#f59e0b;"></span>磁盘</span></div>
         <div class="mon-chart" id="monChart"><div style="text-align:center;color:var(--muted);padding-top:110px;font-size:13px;">图表加载中…（首次采样约需 1 秒）</div></div>
         <div class="mon-host" id="monHost"></div>
-        <p class="tip mon-tip" style="margin:10px 0 0;">实时采样：打开面板时每 <span id="monIvText"><?php echo $_monIv; ?></span> 秒自动采样；想不打开面板也有曲线，在宝塔「计划任务」添加 Shell 脚本每 1 分钟执行：<code id="monCronCmd"><?php echo h($_monCron); ?></code></p>
+        <p class="tip mon-tip" style="margin:10px 0 0;">实时采样：打开面板时每 <span id="monIvText"><?php echo $_monIv; ?></span> 秒自动采样；想不打开面板也有曲线，在宝塔「计划任务」添加 Shell 脚本每 1 分钟执行：<code id="monCronCmd"><?php echo h($_monCron); ?></code><br><span style="color:var(--muted);font-size:12px;">提示：命令中的 IP 地址会自动取你当前访问面板的地址；如果服务器实际 IP 与此不同（例如用域名访问、内网/外网 IP 不一致），请把命令里的 IP 改成你服务器的实际 IP。</span></p>
       </div>
 
       <div class="card">
