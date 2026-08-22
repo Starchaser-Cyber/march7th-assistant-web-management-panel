@@ -1,7 +1,7 @@
 <?php
 /**
- * March7th Assistant 网页管理面板 v1.11
- * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询 + 多实例切换 + 货币战争 + 停止任务 + 停止循环 + 镜像检查 + 更新模式 + 更新分类 + 通知自动消失 + 小助手镜像加速更新 + 镜像版本精准检查
+ * March7th Assistant 网页管理面板 v1.12
+ * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询 + 多实例切换 + 货币战争 + 停止任务 + 停止循环 + 停止容器 + 镜像检查 + 更新模式 + 更新分类 + 通知自动消失 + 小助手镜像加速更新 + 镜像版本精准检查
  * 纯原生 PHP 单文件 · 宝塔友好
  */
 declare(strict_types=1);
@@ -19,7 +19,7 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.11');           // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.12');           // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -39,9 +39,10 @@ $TASKS = array(
     'currencywarsloop'=> array('label' => '货币战争循环', 'desc' => '货币战争循环执行', 'icon' => '♻️', 'long' => true),
 );
 $OPS = array(
-    'restart' => array('label' => '重启容器', 'desc' => 'docker compose restart', 'icon' => '🔄', 'confirm' => '确定重启容器？'),
-    'stop_task' => array('label' => '停止任务（重启容器）', 'desc' => '任务进程即容器主进程（PID 1），停止任务会重启容器', 'icon' => '⏹️', 'confirm' => '任务进程即容器主进程，停止任务将重启容器，确定继续？'),
-    'stop_loop' => array('label' => '停止循环（轻量）', 'desc' => '仅停止货币战争循环子进程，容器与主进程不动', 'icon' => '🛑', 'confirm' => '确定停止货币战争循环？（仅结束循环子进程，不重启容器）'),
+    'restart' => array('label' => '重启容器', 'desc' => 'docker compose restart', 'icon' => '🔄', 'confirm' => '确定重启容器？', 'color' => 'orange'),
+    'stop_task' => array('label' => '停止任务（重启容器）', 'desc' => '任务进程即容器主进程（PID 1），停止任务会重启容器', 'icon' => '⏹️', 'confirm' => '任务进程即容器主进程，停止任务将重启容器，确定继续？', 'color' => 'red'),
+    'stop_loop' => array('label' => '停止循环（轻量）', 'desc' => '仅停止货币战争循环子进程，容器与主进程不动', 'icon' => '🛑', 'confirm' => '确定停止货币战争循环？（仅结束循环子进程，不重启容器）', 'color' => 'blue'),
+    'stop' => array('label' => '停止容器', 'desc' => 'docker compose stop，容器进入停止状态（想再运行点「重启容器」即可恢复）', 'icon' => '⏸️', 'confirm' => '确定停止容器？任务将全部中断，想再运行请点「重启容器」恢复', 'color' => 'gray'),
 );
 
 /* ===== 配置字段定义 ===== */
@@ -1133,6 +1134,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $err = '循环停止失败（可能循环未在运行）：' . $r['out'];
             }
         }
+        elseif ($action === 'stop') {
+            // v1.12：停止容器（docker compose stop），容器进入停止状态不删除，
+            // 想再运行点「重启容器」（restart 对已停止容器同样有效）即可恢复
+            $r = compose('stop');
+            if ($r['code'] === 0) {
+                $msg = '⏸️ 容器已停止，想再运行请点「重启容器」恢复';
+            } else {
+                $err = '容器停止失败：' . $r['out'];
+            }
+        }
+        elseif ($action === 'set_after_finish') {
+            // v1.12：任务结束后快捷设置（after_finish: Exit / None）
+            $val = ($_POST['value'] ?? '') === 'Exit' ? 'Exit' : 'None';
+            $bak = config_backup();
+            $r = config_save_form(array('after_finish' => yaml_format_val($val, 'str')));
+            if ($r['ok']) {
+                $tip = $val === 'Exit' ? '已开启「跑完自动退出游戏」，任务跑完自动退出，下次进入从主界面开始' : '已切换为「跑完保持界面」，任务跑完停在最后界面（可能是模拟宇宙）';
+                $msg = $tip . '（备份：' . ($bak ? basename($bak) : '无') . '）。下次运行任务时生效。';
+                echo json_encode(array('ok' => true, 'msg' => $msg), JSON_UNESCAPED_UNICODE);
+            } else {
+                echo json_encode(array('ok' => false, 'msg' => $r['msg']), JSON_UNESCAPED_UNICODE);
+            }
+            exit;
+        }
         elseif ($action === 'set_update_mode') {
             $mode = ($_POST['mode'] ?? '') === 'manual' ? 'manual' : 'auto';
             if (panel_config_save(array('update_mode' => $mode))) {
@@ -1731,6 +1756,7 @@ html[data-theme="light"] .card { background:var(--card); }
     <?php if ($err): ?><div class="msg err">❌ <?php echo h($err); ?></div><?php endif; ?>
 
     <!-- ===== 概览 ===== -->
+    <?php $_afCfg = yaml_read_simple(); $afVal = isset($_afCfg['after_finish']) ? trim($_afCfg['after_finish'], '"\'') : 'None'; if ($afVal === '') $afVal = 'None'; ?>
     <div class="page active" id="panel-overview">
       <div class="page-head">
         <div class="page-title"><span class="pt-icon">📊</span>概览</div>
@@ -1749,6 +1775,15 @@ html[data-theme="light"] .card { background:var(--card); }
           <form method="post" style="display:inline;"><?php echo csrf_field(); ?><input type="hidden" name="action" value="<?php echo h($key); ?>"><button type="submit" class="btn primary"><?php echo h($t['icon'] . ' ' . $t['label']); ?></button></form>
           <?php endforeach; ?>
         </div>
+      </div>
+
+      <div class="card">
+        <h2><span class="icon">🚪</span> 任务结束后设置 <span class="badge" id="afterFinishBadge" style="background:<?php echo $afVal === 'Exit' ? 'var(--green,#22c55e)' : 'var(--gray,#9ca3af)'; ?>;color:#fff;"><?php echo $afVal === 'Exit' ? '自动退出' : '保持界面'; ?></span></h2>
+        <div class="btn-group">
+          <button type="button" class="btn primary" onclick="setAfterFinish('Exit')">🚪 跑完自动退出游戏</button>
+          <button type="button" class="btn gray" onclick="setAfterFinish('None')">🖥️ 跑完保持界面</button>
+        </div>
+        <p class="tip" style="margin:10px 0 0;">开启「自动退出」后任务全部跑完会自动退出游戏，下次进入从主界面开始，不再停在模拟宇宙界面。当前状态：<strong id="afterFinishVal"><?php echo $afVal === 'Exit' ? '跑完自动退出游戏' : '跑完保持界面（会停在模拟宇宙等最后界面）'; ?></strong>，下次运行任务时生效。</p>
       </div>
 
       <div class="card">
@@ -1827,7 +1862,7 @@ html[data-theme="light"] .card { background:var(--card); }
         <h2><span class="icon">🔧</span> 容器操作</h2>
         <div class="btn-group">
           <?php foreach ($OPS as $key => $op): ?>
-          <form method="post" style="display:inline;" onsubmit="return confirm('<?php echo h($op['confirm']); ?>');"><?php echo csrf_field(); ?><input type="hidden" name="action" value="<?php echo h($key); ?>"><button type="submit" class="btn <?php echo $key === 'restart' ? 'orange' : ($key === 'stop_loop' ? 'blue' : 'red'); ?>"><?php echo h($op['icon'] . ' ' . $op['label']); ?></button></form>
+          <form method="post" style="display:inline;" onsubmit="return confirm('<?php echo h($op['confirm']); ?>');"><?php echo csrf_field(); ?><input type="hidden" name="action" value="<?php echo h($key); ?>"><button type="submit" class="btn <?php echo h($op['color'] ?? 'primary'); ?>"><?php echo h($op['icon'] . ' ' . $op['label']); ?></button></form>
           <?php endforeach; ?>
         </div>
       </div>
@@ -2243,6 +2278,32 @@ function setUpdateMode(mode) {
       if (d && d.ok) {
         alert('✅ ' + d.msg);
         if (mode === 'manual') document.getElementById('updateBanner').style.display = 'none';
+      } else {
+        alert('❌ ' + (d && d.msg ? d.msg : '切换失败'));
+      }
+    }).catch(function(){ alert('❌ 网络错误'); });
+}
+
+function setAfterFinish(v) {
+  var fd = new FormData();
+  fd.append('action', 'set_after_finish');
+  fd.append('value', v);
+  var csrf = document.querySelector('input[name="csrf"]');
+  if (csrf) fd.append('csrf', csrf.value);
+  fetch('index.php', { method:'POST', body: fd })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d && d.ok) {
+        alert('✅ ' + d.msg);
+        var valEl = document.getElementById('afterFinishVal');
+        var badge = document.getElementById('afterFinishBadge');
+        if (v === 'Exit') {
+          if (valEl) valEl.textContent = '跑完自动退出游戏';
+          if (badge) { badge.textContent = '自动退出'; badge.style.background = 'var(--green,#22c55e)'; badge.style.color = '#fff'; }
+        } else {
+          if (valEl) valEl.textContent = '跑完保持界面（会停在模拟宇宙等最后界面）';
+          if (badge) { badge.textContent = '保持界面'; badge.style.background = 'var(--gray,#9ca3af)'; badge.style.color = '#fff'; }
+        }
       } else {
         alert('❌ ' + (d && d.msg ? d.msg : '切换失败'));
       }
