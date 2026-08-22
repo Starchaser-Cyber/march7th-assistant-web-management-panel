@@ -1,7 +1,7 @@
 <?php
 /**
- * March7th Assistant 网页管理面板 v1.9
- * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询 + 多实例切换 + 货币战争 + 停止任务 + 镜像检查 + 更新模式 + 更新分类 + 通知自动消失 + 小助手镜像加速更新 + 镜像版本精准检查
+ * March7th Assistant 网页管理面板 v1.11
+ * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询 + 多实例切换 + 货币战争 + 停止任务 + 停止循环 + 镜像检查 + 更新模式 + 更新分类 + 通知自动消失 + 小助手镜像加速更新 + 镜像版本精准检查
  * 纯原生 PHP 单文件 · 宝塔友好
  */
 declare(strict_types=1);
@@ -19,7 +19,7 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.10');           // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.11');           // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -41,6 +41,7 @@ $TASKS = array(
 $OPS = array(
     'restart' => array('label' => '重启容器', 'desc' => 'docker compose restart', 'icon' => '🔄', 'confirm' => '确定重启容器？'),
     'stop_task' => array('label' => '停止任务（重启容器）', 'desc' => '任务进程即容器主进程（PID 1），停止任务会重启容器', 'icon' => '⏹️', 'confirm' => '任务进程即容器主进程，停止任务将重启容器，确定继续？'),
+    'stop_loop' => array('label' => '停止循环（轻量）', 'desc' => '仅停止货币战争循环子进程，容器与主进程不动', 'icon' => '🛑', 'confirm' => '确定停止货币战争循环？（仅结束循环子进程，不重启容器）'),
 );
 
 /* ===== 配置字段定义 ===== */
@@ -1122,6 +1123,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $err = '容器重启失败：' . $r['out'];
             }
         }
+        elseif ($action === 'stop_loop') {
+            // v1.11：货币战争循环是 docker exec 拉起的子进程（非 PID 1），
+            // 可正常接收 SIGTERM，pkill -15 即可精准停止循环，无需重启容器
+            $r = run_cmd('docker exec ' . escapeshellarg(instance_container()) . ' pkill -15 -f "main.py currencywarsloop"');
+            if ($r['code'] === 0) {
+                $msg = '🛑 货币战争循环已停止（仅结束循环子进程，容器未重启）';
+            } else {
+                $err = '循环停止失败（可能循环未在运行）：' . $r['out'];
+            }
+        }
         elseif ($action === 'set_update_mode') {
             $mode = ($_POST['mode'] ?? '') === 'manual' ? 'manual' : 'auto';
             if (panel_config_save(array('update_mode' => $mode))) {
@@ -1249,6 +1260,7 @@ $cfgVals = $isAuth ? yaml_read_simple() : array();
   --red-bg: #fef2f2;
   --orange: #f59e0b;
   --orange-bg: #fffbeb;
+  --blue: #3b82f6;
   --border: rgba(236,72,153,.16);
   --shadow: 0 8px 32px rgba(236,72,153,.10);
   --radius: 14px;
@@ -1419,6 +1431,7 @@ html[data-theme="light"] .card { background:var(--card); }
 .btn.green { background:var(--green); }
 .btn.orange { background:var(--orange); }
 .btn.red { background:var(--red); }
+.btn.blue { background:var(--blue); }
 .btn.gray { background:#94a3b8; }
 .btn.small { padding:7px 14px; font-size:12.5px; }
 .btn-group { display:flex; flex-wrap:wrap; gap:8px; }
@@ -1814,7 +1827,7 @@ html[data-theme="light"] .card { background:var(--card); }
         <h2><span class="icon">🔧</span> 容器操作</h2>
         <div class="btn-group">
           <?php foreach ($OPS as $key => $op): ?>
-          <form method="post" style="display:inline;" onsubmit="return confirm('<?php echo h($op['confirm']); ?>');"><?php echo csrf_field(); ?><input type="hidden" name="action" value="<?php echo h($key); ?>"><button type="submit" class="btn <?php echo $key === 'restart' ? 'orange' : 'red'; ?>"><?php echo h($op['icon'] . ' ' . $op['label']); ?></button></form>
+          <form method="post" style="display:inline;" onsubmit="return confirm('<?php echo h($op['confirm']); ?>');"><?php echo csrf_field(); ?><input type="hidden" name="action" value="<?php echo h($key); ?>"><button type="submit" class="btn <?php echo $key === 'restart' ? 'orange' : ($key === 'stop_loop' ? 'blue' : 'red'); ?>"><?php echo h($op['icon'] . ' ' . $op['label']); ?></button></form>
           <?php endforeach; ?>
         </div>
       </div>
