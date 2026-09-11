@@ -1,7 +1,7 @@
 <?php
 /**
- * March7th Assistant 网页管理面板 v1.14
- * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询 + 多实例切换 + 货币战争 + 停止任务 + 停止循环 + 停止容器 + 镜像检查 + 更新模式 + 更新分类 + 通知自动消失 + 小助手镜像加速更新 + 镜像版本精准检查 + 资源监控 + 版本备份回滚 + 任务执行历史
+ * March7th Assistant 网页管理面板 v1.15
+ * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询 + 多实例切换 + 货币战争 + 停止任务 + 停止循环 + 停止容器 + 镜像检查 + 更新模式 + 更新分类 + 通知自动消失 + 小助手镜像加速更新 + 镜像版本精准检查 + 资源监控 + 版本备份回滚 + 任务执行历史 + 消息推送可视化配置（一键测试推送）+ 计划任务
  * 纯原生 PHP 单文件 · 宝塔友好
  */
 declare(strict_types=1);
@@ -19,7 +19,7 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.14');           // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.15');           // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -39,6 +39,12 @@ define('BACKUP_KEEP', 5);                    // 备份最多保留份数
  */
 define('HISTORY_IDLE_SECONDS', 90);          // 日志静默超过该秒数视为任务已结束
 define('HISTORY_KEEP', 200);                 // 历史最多保留条数
+
+/* ===== 计划任务（v1.15+） =====
+ * 由宿主机（宝塔「计划任务」）每分钟请求 ?scheduler=1&key=xxx，面板判断是否命中时间点后启动任务。
+ * 这样无需容器内程序常驻，Docker 按需起容器的场景也能定时跑。
+ */
+define('SCHEDULE_WINDOW_SECONDS', 1800);     // 补跑窗口：错过时间点 30 分钟内仍会补跑一次
 
 /* ===== 任务白名单 ===== */
 $TASKS = array(
@@ -115,143 +121,150 @@ $CONFIG_GROUPS = array(
         'scheduled_on_conflict' => array('label' => '任务冲突处理', 'type' => 'select', 'options' => array('skip'=>'跳过','stop'=>'停止当前再启动')),
         'scheduled_chain_continue_on_failure' => array('label' => '链式任务失败后继续', 'type' => 'bool'),
     )),
-    'notify' => array('title' => '通知通用', 'icon' => '📣', 'fields' => array(
-        'notification_enable' => array('label' => '通知总开关', 'type' => 'bool', 'tip' => '关闭后所有渠道推送均失效'),
-        'notify_level'        => array('label' => '通知级别', 'type' => 'select', 'options' => array('all'=>'全部通知','error'=>'仅错误')),
+    /* ===== 消息推送（v1.15+）=====
+     * 小助手的全部推送渠道集中在这里可视化配置，键名均为 config.yaml 里真实存在的顶层平铺标量键，
+     * 直接复用 config_save_form() 的逐行改写逻辑（保留注释、不动结构），无需额外的解析器。
+     * 常用渠道平铺展示，冷门渠道收在折叠区里默认收起，不干扰日常使用。
+     */
+    'notify' => array('title' => '消息推送 · 通用', 'icon' => '🔔', 'note' => '小助手的推送渠道都集中在这一段（v1.15 起），常用渠道任选一个填好即可；填完点表单最下方的「🔔 保存并发送测试推送」能立刻验证是否配通。修改后需重启容器生效。', 'fields' => array(
+        'notification_enable' => array('label' => '通知总开关', 'type' => 'bool', 'tip' => '关闭后所有渠道推送均失效；只想临时静音关这里即可'),
+        'notify_level'        => array('label' => '通知级别', 'type' => 'select', 'options' => array('all'=>'全部通知','error'=>'仅错误'), 'tip' => '选「仅错误」时只有出错才推送，日常成功不打扰'),
         'notify_merge'        => array('label' => '合并通知', 'type' => 'bool', 'tip' => '开启后完整运行结束只发一条汇总'),
-        'notify_send_images'  => array('label' => '推送图片', 'type' => 'bool', 'tip' => '推送消息时附带截图'),
-        'notify_winotify_enable' => array('label' => 'Windows 原生通知', 'type' => 'bool', 'tip' => '仅 Windows 本机运行有效'),
+        'notify_send_images'  => array('label' => '推送图片', 'type' => 'bool', 'tip' => '推送消息时附带游戏截图（部分渠道不支持）'),
     )),
-    'notify_telegram' => array('title' => 'Telegram', 'icon' => '✈️', 'fields' => array(
-        'notify_telegram_enable' => array('label' => '启用 Telegram', 'type' => 'bool', 'tip' => '依赖科学上网环境'),
-        'notify_telegram_token'  => array('label' => 'Bot Token', 'type' => 'password', 'placeholder' => 'BotFather 获取'),
-        'notify_telegram_userid' => array('label' => '接收用户/群组 ID', 'type' => 'str', 'placeholder' => '如 123456789'),
-        'notify_telegram_api_url'=> array('label' => '自定义 API URL', 'type' => 'str', 'placeholder' => '可选'),
-        'notify_telegram_proxies'=> array('label' => '代理地址', 'type' => 'str', 'placeholder' => '如 127.0.0.1:10808'),
-        'notify_telegram_thread_id' => array('label' => 'Topics 线程 ID', 'type' => 'str', 'placeholder' => '可选'),
+    'notify_serverchan' => array('title' => 'Server酱（微信）', 'icon' => '🛎️', 'note' => '微信推送最省事的方案：填一个 SendKey 就能用。修改后需重启容器生效。', 'fields' => array(
+        'notify_serverchanturbo_enable' => array('label' => '启用 Server酱·Turbo', 'type' => 'bool', 'tip' => '免费版每天 5 条，注册地址 sct.ftqq.com'),
+        'notify_serverchanturbo_sctkey' => array('label' => 'SendKey（Turbo）', 'type' => 'password', 'placeholder' => 'SCT 开头的密钥', 'tip' => '登录 sct.ftqq.com，首页即可复制'),
+        'notify_serverchanturbo_channel' => array('label' => '推送渠道', 'type' => 'str', 'placeholder' => '可选', 'tip' => '留空使用默认渠道（微信服务号）'),
+        'notify_serverchanturbo_openid' => array('label' => 'OpenID', 'type' => 'str', 'placeholder' => '可选', 'tip' => '指定接收人的 OpenID，留空发给本人'),
+        'notify_serverchan3_enable' => array('label' => '启用 Server酱·3', 'type' => 'bool', 'tip' => '走 APP 推送，注册地址 sc3.ft07.com'),
+        'notify_serverchan3_sendkey' => array('label' => 'SendKey（3）', 'type' => 'password', 'placeholder' => 'sctp 开头的密钥', 'tip' => 'Turbo 与 3 是两个服务，密钥不通用，按需只填一个'),
     )),
-    'notify_matrix' => array('title' => 'Matrix', 'icon' => '🔗', 'fields' => array(
-        'notify_matrix_enable' => array('label' => '启用 Matrix', 'type' => 'bool'),
-        'notify_matrix_homeserver' => array('label' => '服务器地址', 'type' => 'str', 'placeholder' => '如 https://matrix.org'),
-        'notify_matrix_device_id' => array('label' => '设备 ID', 'type' => 'str', 'placeholder' => '10位大写字母/数字'),
-        'notify_matrix_user_id' => array('label' => '用户 ID', 'type' => 'str', 'placeholder' => '如 @user:matrix.org'),
-        'notify_matrix_access_token' => array('label' => 'Access Token', 'type' => 'password', 'placeholder' => '登录后由服务器分发'),
-        'notify_matrix_room_id' => array('label' => '房间 ID', 'type' => 'str', 'placeholder' => '如 !abc:matrix.org'),
-        'notify_matrix_proxy' => array('label' => '代理', 'type' => 'str', 'placeholder' => '可选'),
-        'notify_matrix_separately_text_media' => array('label' => '文字与图片分开发送', 'type' => 'bool'),
+    'notify_bark' => array('title' => 'Bark（iOS）', 'icon' => '🐶', 'fields' => array(
+        'notify_bark_enable' => array('label' => '启用 Bark', 'type' => 'bool', 'tip' => 'iOS 用户推荐，App Store 搜 Bark 安装，支持推送截图'),
+        'notify_bark_key' => array('label' => '推送 Key', 'type' => 'password', 'placeholder' => '只填 Key，不要带 https://api.day.app/', 'tip' => 'Bark App 首页地址里最后一段就是 Key'),
+        'notify_bark_base_url' => array('label' => '自定义服务 URL', 'type' => 'str', 'placeholder' => '如 https://api.day.app', 'tip' => '只有自建 Bark 服务才填，官方服务留空'),
+        'notify_bark_group' => array('label' => '分组名', 'type' => 'str', 'placeholder' => '可选', 'tip' => 'Bark 里的消息分组，便于归类'),
+        'notify_bark_icon' => array('label' => '图标 URL', 'type' => 'str', 'placeholder' => '可选', 'tip' => '消息左侧显示的小图标'),
+        'notify_bark_sound' => array('label' => '提示音', 'type' => 'str', 'placeholder' => '可选', 'tip' => '如 birdsong、alarm，留空用默认'),
+        'notify_bark_isarchive' => array('label' => '是否归档', 'type' => 'str', 'placeholder' => '可选，1 或 0', 'tip' => '填 1 表示消息存进 Bark 历史记录'),
+        'notify_bark_url' => array('label' => '点击跳转 URL', 'type' => 'str', 'placeholder' => '可选', 'tip' => '点通知后打开的网页地址'),
+        'notify_bark_copy' => array('label' => '复制文本', 'type' => 'str', 'placeholder' => '可选', 'tip' => '通知里附带一段可长按复制的文本'),
+        'notify_bark_autocopy' => array('label' => '自动复制', 'type' => 'str', 'placeholder' => '可选', 'tip' => '填 1 表示收到通知自动复制上面那段文本'),
+        'notify_bark_cipherkey' => array('label' => '加密密钥', 'type' => 'password', 'placeholder' => '需与 App 内一致', 'tip' => '自建加密服务才填'),
+        'notify_bark_ciphermethod' => array('label' => '加密算法', 'type' => 'str', 'placeholder' => 'cbc 或 ecb', 'tip' => '与上方的加密密钥配套使用'),
     )),
-    'notify_serverchan' => array('title' => 'Server酱', 'icon' => '🛎️', 'fields' => array(
-        'notify_serverchanturbo_enable' => array('label' => '启用 Server酱·Turbo', 'type' => 'bool', 'tip' => '微信推送，免费版每天5条 sct.ftqq.com'),
-        'notify_serverchanturbo_sctkey' => array('label' => 'SendKey', 'type' => 'password', 'placeholder' => 'sct 开头的密钥'),
-        'notify_serverchanturbo_channel' => array('label' => '推送渠道', 'type' => 'str', 'placeholder' => '可选'),
-        'notify_serverchanturbo_openid' => array('label' => 'OpenID', 'type' => 'str', 'placeholder' => '可选'),
-        'notify_serverchan3_enable' => array('label' => '启用 Server酱·3', 'type' => 'bool', 'tip' => 'APP 推送 sc3.ft07.com'),
-        'notify_serverchan3_sendkey' => array('label' => 'SendKey', 'type' => 'password', 'placeholder' => 'sct 开头的密钥'),
+    'notify_dingtalk' => array('title' => '钉钉机器人', 'icon' => '📌', 'fields' => array(
+        'notify_dingtalk_enable' => array('label' => '启用钉钉', 'type' => 'bool', 'tip' => '群里加「自定义机器人」后把凭据填到这里'),
+        'notify_dingtalk_token' => array('label' => '机器人 Access Token', 'type' => 'password', 'placeholder' => 'Webhook 里 access_token= 后面的部分', 'tip' => '只填 token，不用填完整 Webhook 地址'),
+        'notify_dingtalk_secret' => array('label' => '加签密钥', 'type' => 'password', 'placeholder' => '可选', 'tip' => '机器人安全设置选了「加签」才需要填，选「自定义关键词」则留空'),
     )),
-    'notify_bark' => array('title' => 'Bark (iOS)', 'icon' => '🐶', 'fields' => array(
-        'notify_bark_enable' => array('label' => '启用 Bark', 'type' => 'bool', 'tip' => 'iOS 用户，App Store 安装'),
-        'notify_bark_key' => array('label' => '推送 Key', 'type' => 'str', 'placeholder' => 'Bark 设备 key'),
-        'notify_bark_group' => array('label' => '分组名', 'type' => 'str', 'placeholder' => '可选'),
-        'notify_bark_icon' => array('label' => '图标 URL', 'type' => 'str', 'placeholder' => '可选'),
-        'notify_bark_isarchive' => array('label' => '是否归档', 'type' => 'str', 'placeholder' => '可选，1 或 0'),
-        'notify_bark_sound' => array('label' => '提示音', 'type' => 'str', 'placeholder' => '可选'),
-        'notify_bark_url' => array('label' => '点击跳转 URL', 'type' => 'str', 'placeholder' => '可选'),
-        'notify_bark_base_url' => array('label' => '自定义服务 URL', 'type' => 'str', 'placeholder' => '可选'),
-        'notify_bark_copy' => array('label' => '复制文本', 'type' => 'str', 'placeholder' => '可选'),
-        'notify_bark_autocopy' => array('label' => '自动复制', 'type' => 'str', 'placeholder' => '可选'),
-        'notify_bark_cipherkey' => array('label' => '加密密钥', 'type' => 'password', 'placeholder' => '需与 APP 一致'),
-        'notify_bark_ciphermethod' => array('label' => '加密算法', 'type' => 'str', 'placeholder' => 'cbc 或 ecb'),
-    )),
-    'notify_smtp' => array('title' => 'SMTP 邮箱', 'icon' => '📧', 'fields' => array(
-        'notify_smtp_enable' => array('label' => '启用 SMTP', 'type' => 'bool', 'tip' => '支持发送截图，QQ 邮箱填授权码'),
-        'notify_smtp_host' => array('label' => 'SMTP 服务器', 'type' => 'str', 'placeholder' => '如 smtp.qq.com'),
-        'notify_smtp_user' => array('label' => '用户名/邮箱', 'type' => 'str'),
-        'notify_smtp_password' => array('label' => '密码/授权码', 'type' => 'password', 'placeholder' => '留空则不修改'),
-        'notify_smtp_From' => array('label' => '发件人', 'type' => 'str'),
-        'notify_smtp_To' => array('label' => '收件人', 'type' => 'str'),
-        'notify_smtp_port' => array('label' => '端口', 'type' => 'str', 'placeholder' => '默认 465'),
-        'notify_smtp_ssl' => array('label' => 'SSL 连接', 'type' => 'bool'),
-        'notify_smtp_starttls' => array('label' => 'STARTTLS', 'type' => 'bool'),
-        'notify_smtp_ssl_unverified' => array('label' => '不验证 SSL 证书', 'type' => 'bool', 'tip' => '自签名邮箱才推荐开启'),
-    )),
-    'notify_qqbot' => array('title' => 'QQ 机器人', 'icon' => '💬', 'fields' => array(
-        'notify_onebot_enable' => array('label' => '启用 OneBot', 'type' => 'bool', 'tip' => '支持 NapCatQQ / OpenShamrock'),
-        'notify_onebot_endpoint' => array('label' => '服务端点 URL', 'type' => 'str', 'placeholder' => '如 http://127.0.0.1:3000'),
-        'notify_onebot_token' => array('label' => 'Access Token', 'type' => 'password', 'placeholder' => '可选'),
-        'notify_onebot_user_id' => array('label' => '接收用户 ID', 'type' => 'str', 'placeholder' => '可选'),
-        'notify_onebot_group_id' => array('label' => '接收群组 ID', 'type' => 'str', 'placeholder' => '可选'),
-        'notify_gocqhttp_enable' => array('label' => '启用 Go-cqhttp', 'type' => 'bool', 'tip' => '已停止维护，旧用户可用'),
-        'notify_gocqhttp_endpoint' => array('label' => '服务端点 URL', 'type' => 'str'),
-        'notify_gocqhttp_message_type' => array('label' => '消息类型', 'type' => 'select', 'options' => array(''=>'默认','private'=>'私聊','group'=>'群消息')),
-        'notify_gocqhttp_token' => array('label' => 'Access Token', 'type' => 'password', 'placeholder' => '可选'),
-        'notify_gocqhttp_user_id' => array('label' => '接收用户 ID', 'type' => 'str', 'placeholder' => '可选'),
-        'notify_gocqhttp_group_id' => array('label' => '接收群组 ID', 'type' => 'str', 'placeholder' => '可选'),
-    )),
-    'notify_dingtalk' => array('title' => '钉钉 / PushPlus', 'icon' => '📌', 'fields' => array(
-        'notify_dingtalk_enable' => array('label' => '启用钉钉', 'type' => 'bool'),
-        'notify_dingtalk_token' => array('label' => '机器人 Access Token', 'type' => 'password'),
-        'notify_dingtalk_secret' => array('label' => '加签密钥', 'type' => 'password', 'placeholder' => '可选'),
-        'notify_pushplus_enable' => array('label' => '启用 PushPlus', 'type' => 'bool'),
-        'notify_pushplus_token' => array('label' => 'Token', 'type' => 'password'),
-        'notify_pushplus_channel' => array('label' => '通知渠道', 'type' => 'str', 'placeholder' => '可选'),
-        'notify_pushplus_webhook' => array('label' => 'Webhook URL', 'type' => 'str', 'placeholder' => '可选'),
-        'notify_pushplus_callbackUrl' => array('label' => '回调 URL', 'type' => 'str', 'placeholder' => '可选'),
+    'notify_pushplus' => array('title' => 'PushPlus', 'icon' => '📮', 'fields' => array(
+        'notify_pushplus_enable' => array('label' => '启用 PushPlus', 'type' => 'bool', 'tip' => '微信推送，pushplus.plus 微信扫码登录后获取 Token'),
+        'notify_pushplus_token' => array('label' => 'Token', 'type' => 'password', 'placeholder' => 'pushplus.plus 首页复制', 'tip' => '免费版每日条数有限'),
+        'notify_pushplus_channel' => array('label' => '通知渠道', 'type' => 'str', 'placeholder' => '可选，如 wechat / webhook', 'tip' => '留空使用默认渠道'),
+        'notify_pushplus_webhook' => array('label' => 'Webhook URL', 'type' => 'str', 'placeholder' => '可选', 'tip' => '渠道选 webhook 时填接收地址'),
+        'notify_pushplus_callbackUrl' => array('label' => '回调 URL', 'type' => 'str', 'placeholder' => '可选', 'tip' => '推送后的回调地址，一般不需要'),
     )),
     'notify_wechat' => array('title' => '企业微信', 'icon' => '💼', 'fields' => array(
-        'notify_wechatworkapp_enable' => array('label' => '启用应用通知', 'type' => 'bool', 'tip' => '支持发送截图'),
-        'notify_wechatworkapp_corpid' => array('label' => '企业 ID', 'type' => 'str'),
-        'notify_wechatworkapp_corpsecret' => array('label' => '应用密钥', 'type' => 'password'),
-        'notify_wechatworkapp_agentid' => array('label' => 'AgentId', 'type' => 'str'),
-        'notify_wechatworkapp_touser' => array('label' => '目标用户', 'type' => 'str', 'placeholder' => '@all 或 用户ID'),
-        'notify_wechatworkapp_base_url' => array('label' => '自定义 API 地址', 'type' => 'str', 'placeholder' => '可选'),
-        'notify_wechatworkbot_enable' => array('label' => '启用机器人通知', 'type' => 'bool'),
-        'notify_wechatworkbot_key' => array('label' => '机器人 Key', 'type' => 'password'),
-        'notify_wechatworkbot_webhook_url' => array('label' => 'Webhook URL', 'type' => 'str', 'placeholder' => '可选'),
-    )),
-    'notify_other' => array('title' => 'Gotify / Discord / PushDeer', 'icon' => '🔔', 'fields' => array(
-        'notify_gotify_enable' => array('label' => '启用 Gotify', 'type' => 'bool'),
-        'notify_gotify_url' => array('label' => '服务器 URL', 'type' => 'str'),
-        'notify_gotify_token' => array('label' => 'Access Token', 'type' => 'password'),
-        'notify_gotify_priority' => array('label' => '优先级(1-10)', 'type' => 'int'),
-        'notify_discord_enable' => array('label' => '启用 Discord', 'type' => 'bool'),
-        'notify_discord_webhook' => array('label' => 'Webhook URL', 'type' => 'str'),
-        'notify_discord_username' => array('label' => '自定义用户名', 'type' => 'str', 'placeholder' => '可选'),
-        'notify_discord_avatar_url' => array('label' => '自定义头像 URL', 'type' => 'str', 'placeholder' => '可选'),
-        'notify_discord_color' => array('label' => '嵌入消息颜色', 'type' => 'str', 'placeholder' => '可选'),
-        'notify_pushdeer_enable' => array('label' => '启用 PushDeer', 'type' => 'bool'),
-        'notify_pushdeer_token' => array('label' => 'Token', 'type' => 'password'),
-        'notify_pushdeer_url' => array('label' => '自定义服务 URL', 'type' => 'str', 'placeholder' => '可选'),
+        'notify_wechatworkbot_enable' => array('label' => '启用机器人通知（简单）', 'type' => 'bool', 'tip' => '群里加「群机器人」即可，配置最简单，推荐先用这个'),
+        'notify_wechatworkbot_key' => array('label' => '机器人 Key', 'type' => 'password', 'placeholder' => 'Webhook 里 key= 后面的部分', 'tip' => '只填 key，不用填完整 Webhook 地址'),
+        'notify_wechatworkbot_webhook_url' => array('label' => 'Webhook URL', 'type' => 'str', 'placeholder' => '可选', 'tip' => '自建中转时才填'),
+        'notify_wechatworkapp_enable' => array('label' => '启用应用通知（可发截图）', 'type' => 'bool', 'tip' => '需要在企业微信后台自建应用，但支持推送截图'),
+        'notify_wechatworkapp_corpid' => array('label' => '企业 ID', 'type' => 'str', 'placeholder' => '我的企业 → 企业信息里查看', 'tip' => '以 ww 或 wx 开头'),
+        'notify_wechatworkapp_corpsecret' => array('label' => '应用密钥', 'type' => 'password', 'placeholder' => '应用管理 → 你的应用 → Secret', 'tip' => '应用级的 Secret，不是通讯录密钥'),
+        'notify_wechatworkapp_agentid' => array('label' => 'AgentId', 'type' => 'str', 'placeholder' => '应用详情页可看到（纯数字）', 'tip' => '企业微信应用详情里的 AgentId'),
+        'notify_wechatworkapp_touser' => array('label' => '目标用户', 'type' => 'str', 'placeholder' => '@all 或 成员账号', 'tip' => '填 @all 发给全企业成员，也可填成员 UserID，多个用 | 分隔'),
+        'notify_wechatworkapp_base_url' => array('label' => '自定义 API 地址', 'type' => 'str', 'placeholder' => '可选', 'tip' => '默认走官方 API，一般留空'),
     )),
     'notify_lark' => array('title' => '飞书', 'icon' => '🪶', 'fields' => array(
-        'notify_lark_enable' => array('label' => '启用飞书', 'type' => 'bool'),
-        'notify_lark_webhook' => array('label' => 'Webhook URL', 'type' => 'str'),
-        'notify_lark_content' => array('label' => '消息内容', 'type' => 'str', 'placeholder' => '可选'),
-        'notify_lark_keyword' => array('label' => '安全关键词', 'type' => 'str', 'placeholder' => '无则留空'),
-        'notify_lark_sign' => array('label' => '签名密钥', 'type' => 'password', 'placeholder' => '可选'),
-        'notify_lark_imageenable' => array('label' => '图片消息', 'type' => 'bool', 'tip' => '开启需自建飞书应用'),
-        'notify_lark_appid' => array('label' => '应用 AppID', 'type' => 'str', 'placeholder' => '图片消息必填'),
-        'notify_lark_secret' => array('label' => '应用 Secret', 'type' => 'password', 'placeholder' => '图片消息必填'),
+        'notify_lark_enable' => array('label' => '启用飞书', 'type' => 'bool', 'tip' => '群里加「自定义机器人」后把 Webhook 地址填到这里'),
+        'notify_lark_webhook' => array('label' => 'Webhook 地址', 'type' => 'password', 'placeholder' => 'https://open.feishu.cn/open-apis/bot/v2/hook/xxxx', 'tip' => '完整 Webhook 地址，飞书群设置 → 群机器人里复制'),
+        'notify_lark_keyword' => array('label' => '安全关键词', 'type' => 'str', 'placeholder' => '无则留空', 'tip' => '机器人安全设置选了「关键词」时必填，且消息内容需包含该关键词'),
+        'notify_lark_sign' => array('label' => '签名密钥', 'type' => 'password', 'placeholder' => '可选', 'tip' => '机器人安全设置选了「签名校验」时才填'),
+        'notify_lark_content' => array('label' => '消息内容', 'type' => 'str', 'placeholder' => '可选', 'tip' => '自定义消息模板，留空用默认内容'),
+        'notify_lark_imageenable' => array('label' => '图片消息', 'type' => 'bool', 'tip' => '开启后可推送截图，需要自建飞书应用'),
+        'notify_lark_appid' => array('label' => '应用 AppID', 'type' => 'str', 'placeholder' => '图片消息必填', 'tip' => '飞书开放平台自建应用的 AppID'),
+        'notify_lark_secret' => array('label' => '应用 Secret', 'type' => 'password', 'placeholder' => '图片消息必填', 'tip' => '飞书开放平台自建应用的 App Secret'),
     )),
-    'notify_kook' => array('title' => 'KOOK / MeoW', 'icon' => '🎧', 'fields' => array(
-        'notify_kook_enable' => array('label' => '启用 KOOK', 'type' => 'bool', 'tip' => '支持发送截图'),
-        'notify_kook_token' => array('label' => '机器人 Token', 'type' => 'password'),
-        'notify_kook_target_id' => array('label' => '目标 ID', 'type' => 'str', 'placeholder' => '用户ID或频道ID'),
-        'notify_kook_chat_type' => array('label' => '消息类型', 'type' => 'str', 'placeholder' => '1 私聊 / 9 频道'),
-        'notify_meow_enable' => array('label' => '启用 MeoW', 'type' => 'bool'),
-        'notify_meow_nickname' => array('label' => '昵称', 'type' => 'str'),
+    'notify_telegram' => array('title' => 'Telegram', 'icon' => '✈️', 'fields' => array(
+        'notify_telegram_enable' => array('label' => '启用 Telegram', 'type' => 'bool', 'tip' => '服务器需能访问 Telegram，国内服务器通常要配代理'),
+        'notify_telegram_token'  => array('label' => 'Bot Token', 'type' => 'password', 'placeholder' => 'BotFather 获取', 'tip' => '在 Telegram 里找 @BotFather 创建机器人后复制 Token'),
+        'notify_telegram_userid' => array('label' => '接收用户/群组 ID', 'type' => 'str', 'placeholder' => '如 123456789', 'tip' => '私聊 ID 找 @userinfobot 获取；群组填 -100 开头的 ID'),
+        'notify_telegram_api_url'=> array('label' => '自定义 API URL', 'type' => 'str', 'placeholder' => '可选', 'tip' => '只有自建反向代理/中转服务器才填'),
+        'notify_telegram_proxies'=> array('label' => '代理地址', 'type' => 'str', 'placeholder' => '如 127.0.0.1:10808', 'tip' => '容器内可访问的代理地址，一般留空'),
+        'notify_telegram_thread_id' => array('label' => 'Topics 线程 ID', 'type' => 'str', 'placeholder' => '可选', 'tip' => '群组开了话题（Topics）时才需要'),
     )),
-    'notify_webhook' => array('title' => 'Webhook / 自定义', 'icon' => '🕸️', 'fields' => array(
-        'notify_webhook_enable' => array('label' => '启用 Webhook', 'type' => 'bool', 'tip' => '支持自定义请求方法/Headers/Body'),
-        'notify_webhook_url' => array('label' => '接收地址', 'type' => 'str', 'placeholder' => '如 http://localhost:8080/notify'),
-        'notify_webhook_method' => array('label' => '请求方法', 'type' => 'select', 'options' => array(''=>'默认 POST','GET'=>'GET','POST'=>'POST','PUT'=>'PUT','DELETE'=>'DELETE')),
-        'notify_webhook_headers' => array('label' => '自定义 Headers', 'type' => 'textarea', 'placeholder' => 'JSON 格式，如 {"Authorization": "Bearer token"}'),
-        'notify_webhook_body' => array('label' => '请求体模板', 'type' => 'textarea', 'placeholder' => 'JSON 或字符串，支持 {title} {content} {image}'),
-        'notify_custom_enable' => array('label' => '启用自定义通知', 'type' => 'bool', 'tip' => '支持发送截图'),
-        'notify_custom_url' => array('label' => '请求 URL', 'type' => 'str', 'placeholder' => '如 http://localhost:3000/send_msg'),
-        'notify_custom_method' => array('label' => '请求类型', 'type' => 'str', 'placeholder' => 'get / post'),
-        'notify_custom_datatype' => array('label' => '数据类型', 'type' => 'str', 'placeholder' => 'data / json'),
-        'notify_custom_image' => array('label' => '图片模板', 'type' => 'str', 'placeholder' => '可选，onebot 参考格式'),
-        'notify_custom_data' => array('label' => '请求体', 'type' => 'textarea', 'placeholder' => 'onebot 参考 {user_id: 114514, message: [...]}'),
+    'notify_gotify' => array('title' => 'Gotify（自建）', 'icon' => '🔧', 'fields' => array(
+        'notify_gotify_enable' => array('label' => '启用 Gotify', 'type' => 'bool', 'tip' => '自建推送服务，适合不想依赖第三方推送的用户'),
+        'notify_gotify_url' => array('label' => '服务器 URL', 'type' => 'str', 'placeholder' => '如 http://1.2.3.4:8080', 'tip' => 'Gotify 服务地址，注意容器内能否访问'),
+        'notify_gotify_token' => array('label' => 'Access Token', 'type' => 'password', 'placeholder' => 'Apps 里创建应用后生成', 'tip' => 'Gotify 后台 → Apps → 创建应用 → Token'),
+        'notify_gotify_priority' => array('label' => '优先级（1-10）', 'type' => 'int', 'tip' => '数字越大通知越「重要」，默认 5'),
+    )),
+    'notify_discord' => array('title' => 'Discord', 'icon' => '🎮', 'fields' => array(
+        'notify_discord_enable' => array('label' => '启用 Discord', 'type' => 'bool', 'tip' => '服务器能访问 Discord 时可用'),
+        'notify_discord_webhook' => array('label' => 'Webhook URL', 'type' => 'password', 'placeholder' => 'https://discord.com/api/webhooks/xxx', 'tip' => '频道设置 → 整合 → Webhook → 复制 Webhook 网址'),
+        'notify_discord_username' => array('label' => '自定义用户名', 'type' => 'str', 'placeholder' => '可选', 'tip' => '消息显示的发件人名字'),
+        'notify_discord_avatar_url' => array('label' => '自定义头像 URL', 'type' => 'str', 'placeholder' => '可选', 'tip' => '消息头像图片地址'),
+        'notify_discord_color' => array('label' => '嵌入消息颜色', 'type' => 'str', 'placeholder' => '可选，如 #ec4899', 'tip' => '左侧色条颜色'),
+    )),
+    'notify_smtp' => array('title' => 'SMTP 邮箱', 'icon' => '📧', 'fields' => array(
+        'notify_smtp_enable' => array('label' => '启用 SMTP', 'type' => 'bool', 'tip' => '邮件推送，支持发送截图；QQ 邮箱需填授权码而非登录密码'),
+        'notify_smtp_host' => array('label' => 'SMTP 服务器', 'type' => 'str', 'placeholder' => '如 smtp.qq.com', 'tip' => 'QQ 邮箱 smtp.qq.com、163 邮箱 smtp.163.com'),
+        'notify_smtp_user' => array('label' => '用户名/邮箱', 'type' => 'str', 'placeholder' => '如 123456@qq.com', 'tip' => '登录邮箱的完整地址'),
+        'notify_smtp_password' => array('label' => '密码/授权码', 'type' => 'password', 'placeholder' => '留空则不修改', 'tip' => 'QQ / 163 邮箱在设置里开启 SMTP 后生成授权码'),
+        'notify_smtp_From' => array('label' => '发件人', 'type' => 'str', 'placeholder' => '一般与用户名相同', 'tip' => '部分邮箱要求发件人必须是本邮箱地址'),
+        'notify_smtp_To' => array('label' => '收件人', 'type' => 'str', 'placeholder' => '多个用逗号分隔', 'tip' => '可以填自己的邮箱收通知'),
+        'notify_smtp_port' => array('label' => '端口', 'type' => 'str', 'placeholder' => '默认 465', 'tip' => 'SSL 通常是 465，STARTTLS 通常是 587'),
+        'notify_smtp_ssl' => array('label' => 'SSL 连接', 'type' => 'bool', 'tip' => '端口 465 时开启'),
+        'notify_smtp_starttls' => array('label' => 'STARTTLS', 'type' => 'bool', 'tip' => '端口 587 时开启'),
+        'notify_smtp_ssl_unverified' => array('label' => '不验证 SSL 证书', 'type' => 'bool', 'tip' => '自签名证书的邮箱才推荐开启'),
+    )),
+    'notify_webhook' => array('title' => '通用 Webhook', 'icon' => '🕸️', 'fields' => array(
+        'notify_webhook_enable' => array('label' => '启用 Webhook', 'type' => 'bool', 'tip' => '想接到自建服务 / 其他推送平台时用，支持自定义请求方法、Headers 与 Body'),
+        'notify_webhook_url' => array('label' => '接收地址', 'type' => 'str', 'placeholder' => '如 http://localhost:8080/notify', 'tip' => '注意 Docker 容器内能否访问该地址（宿主机可用 172.17.0.1 或实际内网 IP）'),
+        'notify_webhook_method' => array('label' => '请求方法', 'type' => 'select', 'options' => array(''=>'默认 POST','GET'=>'GET','POST'=>'POST','PUT'=>'PUT','DELETE'=>'DELETE'), 'tip' => '留空按小助手默认 POST'),
+        'notify_webhook_headers' => array('label' => '自定义 Headers', 'type' => 'textarea', 'placeholder' => 'JSON 格式，如 {"Authorization": "Bearer token"}', 'tip' => 'JSON 格式，需要鉴权的平台通常要填'),
+        'notify_webhook_body' => array('label' => '请求体模板', 'type' => 'textarea', 'placeholder' => 'JSON 或字符串，支持 {title} {content} {image}', 'tip' => '可用 {title} {content} {image} 占位符'),
+    )),
+
+    /* ---- 更多渠道：相对冷门的推送统一收在折叠区，点标题展开 ---- */
+    'notify_matrix' => array('title' => '更多渠道 · Matrix / PushDeer / KOOK / QQ 机器人 / 自定义', 'icon' => '🧩', 'collapsed' => true, 'note' => '折叠区里是相对冷门的推送渠道与自定义通知，按需点开填写；改完同样需要重启容器生效。', 'fields' => array(
+        'notify_matrix_enable' => array('label' => 'Matrix · 启用', 'type' => 'bool'),
+        'notify_matrix_homeserver' => array('label' => 'Matrix · 服务器地址', 'type' => 'str', 'placeholder' => '如 https://matrix.org'),
+        'notify_matrix_user_id' => array('label' => 'Matrix · 用户 ID', 'type' => 'str', 'placeholder' => '如 @user:matrix.org'),
+        'notify_matrix_access_token' => array('label' => 'Matrix · Access Token', 'type' => 'password', 'placeholder' => '登录后由服务器分发'),
+        'notify_matrix_room_id' => array('label' => 'Matrix · 房间 ID', 'type' => 'str', 'placeholder' => '如 !abc:matrix.org'),
+        'notify_matrix_device_id' => array('label' => 'Matrix · 设备 ID', 'type' => 'str', 'placeholder' => '10 位大写字母/数字'),
+        'notify_matrix_proxy' => array('label' => 'Matrix · 代理', 'type' => 'str', 'placeholder' => '可选'),
+        'notify_matrix_separately_text_media' => array('label' => 'Matrix · 文字与图片分开发送', 'type' => 'bool'),
+        'notify_pushdeer_enable' => array('label' => 'PushDeer · 启用', 'type' => 'bool', 'tip' => '自建或官方 PushDeer 服务'),
+        'notify_pushdeer_token' => array('label' => 'PushDeer · Token', 'type' => 'password'),
+        'notify_pushdeer_url' => array('label' => 'PushDeer · 自定义服务 URL', 'type' => 'str', 'placeholder' => '可选'),
+        'notify_kook_enable' => array('label' => 'KOOK · 启用', 'type' => 'bool', 'tip' => 'KOOK 机器人，支持发送截图'),
+        'notify_kook_token' => array('label' => 'KOOK · 机器人 Token', 'type' => 'password', 'placeholder' => '开发者中心机器人 Token'),
+        'notify_kook_target_id' => array('label' => 'KOOK · 目标 ID', 'type' => 'str', 'placeholder' => '用户 ID 或频道 ID'),
+        'notify_kook_chat_type' => array('label' => 'KOOK · 消息类型', 'type' => 'str', 'placeholder' => '1 私聊 / 9 频道'),
+        'notify_meow_enable' => array('label' => 'MeoW · 启用', 'type' => 'bool', 'tip' => 'MeoW 推送（iOS 通知）'),
+        'notify_meow_nickname' => array('label' => 'MeoW · 昵称', 'type' => 'str'),
+        'notify_onebot_enable' => array('label' => 'OneBot · 启用', 'type' => 'bool', 'tip' => '支持 NapCatQQ / OpenShamrock 等 OneBot 实现'),
+        'notify_onebot_endpoint' => array('label' => 'OneBot · 服务端点 URL', 'type' => 'str', 'placeholder' => '如 http://127.0.0.1:3000'),
+        'notify_onebot_token' => array('label' => 'OneBot · Access Token', 'type' => 'password', 'placeholder' => '可选'),
+        'notify_onebot_user_id' => array('label' => 'OneBot · 接收用户 ID', 'type' => 'str', 'placeholder' => '可选'),
+        'notify_onebot_group_id' => array('label' => 'OneBot · 接收群组 ID', 'type' => 'str', 'placeholder' => '可选'),
+        'notify_gocqhttp_enable' => array('label' => 'go-cqhttp · 启用', 'type' => 'bool', 'tip' => '已停止维护，老用户仍可用'),
+        'notify_gocqhttp_endpoint' => array('label' => 'go-cqhttp · 服务端点 URL', 'type' => 'str'),
+        'notify_gocqhttp_message_type' => array('label' => 'go-cqhttp · 消息类型', 'type' => 'select', 'options' => array(''=>'默认','private'=>'私聊','group'=>'群消息')),
+        'notify_gocqhttp_token' => array('label' => 'go-cqhttp · Access Token', 'type' => 'password', 'placeholder' => '可选'),
+        'notify_gocqhttp_user_id' => array('label' => 'go-cqhttp · 接收用户 ID', 'type' => 'str', 'placeholder' => '可选'),
+        'notify_gocqhttp_group_id' => array('label' => 'go-cqhttp · 接收群组 ID', 'type' => 'str', 'placeholder' => '可选'),
+        'notify_custom_enable' => array('label' => '自定义通知 · 启用', 'type' => 'bool', 'tip' => '完全自定义请求地址与请求体，支持截图'),
+        'notify_custom_url' => array('label' => '自定义通知 · 请求 URL', 'type' => 'str', 'placeholder' => '如 http://localhost:3000/send_msg'),
+        'notify_custom_method' => array('label' => '自定义通知 · 请求类型', 'type' => 'str', 'placeholder' => 'get / post'),
+        'notify_custom_datatype' => array('label' => '自定义通知 · 数据类型', 'type' => 'str', 'placeholder' => 'data / json'),
+        'notify_custom_image' => array('label' => '自定义通知 · 图片模板', 'type' => 'textarea', 'placeholder' => '可选，OneBot 参考格式'),
+        'notify_custom_data' => array('label' => '自定义通知 · 请求体', 'type' => 'textarea', 'placeholder' => 'OneBot 参考 {user_id: 114514, message: [...]}'),
+        'notify_winotify_enable' => array('label' => 'Windows 原生通知', 'type' => 'bool', 'tip' => '仅在 Windows 本机直接运行小助手时有效，Docker 部署下不生效'),
     )),
 
     'other' => array('title' => '其他设置', 'icon' => '🔧', 'fields' => array(
@@ -267,6 +280,38 @@ $CONFIG_GROUPS = array(
         'autoplot_skip_enable'      => array('label' => '自动跳过对话', 'type' => 'bool'),
         'autoplot_click_enable'     => array('label' => '自动选择对话选项', 'type' => 'bool'),
     )),
+);
+
+/* ===== 推送渠道体检规则（v1.15+） =====
+ * 每项含义：
+ *   group    : 该渠道所属的 $CONFIG_GROUPS 分组键（用来取分组标题做渠道名兜底）
+ *   enable   : 独立启用开关的**真实键名**；没有独立开关的渠道写 null，
+ *              体检时改用「任一必填键非空即视为启用」
+ *   required : 必填键名数组（展示用的可读名一律从 $CONFIG_GROUPS 取真实 label，不另编名字）
+ * 仅服务于「🔍 保存并体检」的只读判断，不参与配置写入，也不改变任何已有功能行为。
+ */
+$NOTIFY_CHANNEL_RULES = array(
+    array('group' => 'notify_serverchan', 'enable' => 'notify_serverchanturbo_enable', 'required' => array('notify_serverchanturbo_sctkey')),
+    array('group' => 'notify_serverchan', 'enable' => 'notify_serverchan3_enable', 'required' => array('notify_serverchan3_sendkey')),
+    array('group' => 'notify_bark', 'enable' => 'notify_bark_enable', 'required' => array('notify_bark_key')),
+    array('group' => 'notify_dingtalk', 'enable' => 'notify_dingtalk_enable', 'required' => array('notify_dingtalk_token')),
+    array('group' => 'notify_pushplus', 'enable' => 'notify_pushplus_enable', 'required' => array('notify_pushplus_token')),
+    array('group' => 'notify_wechat', 'enable' => 'notify_wechatworkbot_enable', 'required' => array('notify_wechatworkbot_key')),
+    array('group' => 'notify_wechat', 'enable' => 'notify_wechatworkapp_enable', 'required' => array('notify_wechatworkapp_corpid', 'notify_wechatworkapp_corpsecret', 'notify_wechatworkapp_agentid', 'notify_wechatworkapp_touser')),
+    array('group' => 'notify_lark', 'enable' => 'notify_lark_enable', 'required' => array('notify_lark_webhook')),
+    array('group' => 'notify_telegram', 'enable' => 'notify_telegram_enable', 'required' => array('notify_telegram_token', 'notify_telegram_userid')),
+    array('group' => 'notify_gotify', 'enable' => 'notify_gotify_enable', 'required' => array('notify_gotify_url', 'notify_gotify_token')),
+    array('group' => 'notify_discord', 'enable' => 'notify_discord_enable', 'required' => array('notify_discord_webhook')),
+    array('group' => 'notify_smtp', 'enable' => 'notify_smtp_enable', 'required' => array('notify_smtp_host', 'notify_smtp_user', 'notify_smtp_password', 'notify_smtp_To')),
+    array('group' => 'notify_webhook', 'enable' => 'notify_webhook_enable', 'required' => array('notify_webhook_url')),
+    array('group' => 'notify_matrix', 'enable' => 'notify_matrix_enable', 'required' => array('notify_matrix_homeserver', 'notify_matrix_access_token', 'notify_matrix_room_id')),
+    array('group' => 'notify_matrix', 'enable' => 'notify_pushdeer_enable', 'required' => array('notify_pushdeer_token')),
+    array('group' => 'notify_matrix', 'enable' => 'notify_kook_enable', 'required' => array('notify_kook_token', 'notify_kook_target_id')),
+    array('group' => 'notify_matrix', 'enable' => 'notify_meow_enable', 'required' => array('notify_meow_nickname')),
+    array('group' => 'notify_matrix', 'enable' => 'notify_onebot_enable', 'required' => array('notify_onebot_endpoint')),
+    array('group' => 'notify_matrix', 'enable' => 'notify_gocqhttp_enable', 'required' => array('notify_gocqhttp_endpoint')),
+    array('group' => 'notify_matrix', 'enable' => 'notify_custom_enable', 'required' => array('notify_custom_url')),
+    array('group' => 'notify_matrix', 'enable' => 'notify_winotify_enable', 'required' => array()),
 );
 
 /* ===== 工具函数 ===== */
@@ -542,6 +587,145 @@ function config_backup() {
     $bak = dirname(instance_config()) . '/config.yaml.bak.' . date('YmdHis');
     if (@copy(instance_config(), $bak)) return $bak;
     return false;
+}
+
+/* ===== 推送配置体检（v1.15+，纯只读） =====
+ * 用途：「🔍 保存并体检」保存配置后，判断哪些渠道真正会发出去、哪些启用了却缺必填项。
+ * 只读 $cfgVals（yaml_read_simple() 的结果），不写配置、不发消息。
+ */
+/** yaml 值是否算「空」：去掉引号、空格、制表符后为空串即算空 */
+function notify_val_empty($v) {
+    return trim((string)$v, "\"' \t") === '';
+}
+/** yaml 值是否为 true（大小写不敏感，兼容带引号写法） */
+function notify_val_true($v) {
+    return strtolower(trim((string)$v, "\"' \t")) === 'true';
+}
+/** 真实键名 => 字段定义索引（label / 所属分组），展示文案全部取自 $CONFIG_GROUPS */
+function notify_field_index() {
+    global $CONFIG_GROUPS;
+    static $idx = null;
+    if ($idx !== null) return $idx;
+    $idx = array();
+    foreach ($CONFIG_GROUPS as $gk => $g) {
+        foreach ($g['fields'] as $fk => $f) {
+            $idx[$fk] = array('label' => isset($f['label']) ? (string)$f['label'] : (string)$fk, 'group' => (string)$gk);
+        }
+    }
+    return $idx;
+}
+/** 渠道展示名：取启用开关的真实 label（去掉「启用」「· 启用」）；没有开关时退回分组标题 */
+function notify_channel_name($rule, $rules = null) {
+    global $CONFIG_GROUPS, $NOTIFY_CHANNEL_RULES;
+    $all = ($rules === null) ? $NOTIFY_CHANNEL_RULES : $rules;
+    $idx = notify_field_index();
+    $gk = isset($rule['group']) ? (string)$rule['group'] : '';
+    $gtitle = isset($CONFIG_GROUPS[$gk]['title']) ? (string)$CONFIG_GROUPS[$gk]['title'] : '';
+    $gshort = trim((string)preg_replace('/^更多渠道\s*·\s*/u', '', $gtitle));
+    $ek = isset($rule['enable']) ? $rule['enable'] : null;
+    $name = '';
+    if ($ek !== null && $ek !== '' && isset($idx[$ek])) {
+        $name = trim((string)preg_replace('/^启用\s*/u', '', $idx[$ek]['label']));
+        $name = trim((string)preg_replace('/\s*·\s*启用$/u', '', $name));
+    }
+    if ($name === '') return $gshort !== '' ? $gshort : $gk;
+    // 同一分组里放了多个渠道（如企业微信的机器人 / 应用）时，前置分组短名做区分
+    $sameGroup = 0;
+    foreach ($all as $r) {
+        if ((isset($r['group']) ? (string)$r['group'] : '') === $gk) $sameGroup++;
+    }
+    if ($sameGroup > 1 && $gshort !== '' && strpos($gshort, '/') === false && strlen($gshort) <= 15 && strpos($name, $gshort) === false) {
+        return $gshort . ' · ' . $name;
+    }
+    return $name;
+}
+/** 必填项的可读名：取真实 label，去掉折叠区字段自带的「渠道 · 」前缀 */
+function notify_field_label($key, $channelName, $fields) {
+    $label = isset($fields[$key]) ? $fields[$key]['label'] : (string)$key;
+    $pos = strpos($label, ' · ');
+    if ($pos !== false) {
+        $head = substr($label, 0, $pos);
+        if ($head === $channelName || ($head !== '' && strpos($channelName, $head) !== false)) {
+            $label = substr($label, $pos + 3);
+        }
+    }
+    return trim($label);
+}
+/**
+ * 推送配置体检
+ * @param array      $cfgVals yaml_read_simple() 解析出的数组
+ * @param array|null $rules   渠道规则表（默认用全局 $NOTIFY_CHANNEL_RULES，仅测试时可注入）
+ * @return array array('master'=>bool, 'ok'=>array(array('name'=>..,'missing'=>array()),..), 'warn'=>array(same), 'off'=>int)
+ */
+function notify_health_check($cfgVals, $rules = null) {
+    global $NOTIFY_CHANNEL_RULES;
+    if ($rules === null) $rules = $NOTIFY_CHANNEL_RULES;
+    if (!is_array($cfgVals)) $cfgVals = array();
+    if (!is_array($rules)) $rules = array();
+    $fields = notify_field_index();
+    $master = notify_val_true(isset($cfgVals['notification_enable']) ? $cfgVals['notification_enable'] : '');
+    $ok = array();
+    $warn = array();
+    $off = 0;
+    foreach ($rules as $rule) {
+        if (!is_array($rule)) continue;
+        $ek = isset($rule['enable']) ? $rule['enable'] : null;
+        $required = (isset($rule['required']) && is_array($rule['required'])) ? $rule['required'] : array();
+        $enabled = false;
+        if ($ek !== null && $ek !== '') {
+            // 有独立启用开关：以开关为准
+            $enabled = notify_val_true(isset($cfgVals[$ek]) ? $cfgVals[$ek] : '');
+        } else {
+            // 没有独立启用开关：任一必填键填了内容即视为启用
+            foreach ($required as $rk) {
+                if (!notify_val_empty(isset($cfgVals[$rk]) ? $cfgVals[$rk] : '')) { $enabled = true; break; }
+            }
+        }
+        if (!$enabled) { $off++; continue; }
+        $name = notify_channel_name($rule, $rules);
+        $missing = array();
+        foreach ($required as $rk) {
+            if (notify_val_empty(isset($cfgVals[$rk]) ? $cfgVals[$rk] : '')) $missing[] = notify_field_label($rk, $name, $fields);
+        }
+        if (!empty($missing)) $warn[] = array('name' => $name, 'missing' => $missing);
+        else $ok[] = array('name' => $name, 'missing' => array());
+    }
+    return array('master' => $master, 'ok' => $ok, 'warn' => $warn, 'off' => $off);
+}
+/** 体检结果转成页面提示（渲染在「消息推送」分组上方；配色沿用主题变量） */
+function notify_check_html($res) {
+    if (!is_array($res)) return '';
+    $master = !empty($res['master']);
+    $oks = isset($res['ok']) ? $res['ok'] : array();
+    $warns = isset($res['warn']) ? $res['warn'] : array();
+    $names = array();
+    foreach ($oks as $it) $names[] = $it['name'];
+    $html = '<div class="nchk-wrap" id="notifyCheckBox">';
+    $html .= '<div class="nchk-title">🔍 推送配置体检</div>';
+    if (!$master) {
+        $html .= '<div class="nchk nchk-red">⚠️ 推送总开关（notification_enable）未开启，下面所有渠道都不会生效。</div>';
+    }
+    if (!empty($warns)) {
+        $html .= '<div class="nchk nchk-orange">⚠️ 有 ' . count($warns) . ' 个渠道已启用但缺少必填项：<ul>';
+        foreach ($warns as $it) {
+            $html .= '<li><b>' . h($it['name']) . '</b>：缺少「' . h(implode('」「', $it['missing'])) . '」</li>';
+        }
+        $html .= '</ul></div>';
+    }
+    if (!empty($oks)) {
+        if (!$master) {
+            $html .= '<div class="nchk nchk-green">✅ 已填齐全 ' . count($oks) . ' 个渠道：' . h(implode('、', $names)) . '（把总开关打开后即生效）</div>';
+        } elseif (!empty($warns)) {
+            $html .= '<div class="nchk nchk-green">✅ 当前生效 ' . count($oks) . ' 个渠道：' . h(implode('、', $names)) . '</div>';
+        } else {
+            $html .= '<div class="nchk nchk-green">✅ 体检通过，当前生效 ' . count($oks) . ' 个渠道：' . h(implode('、', $names)) . '</div>';
+        }
+    } elseif (empty($warns)) {
+        $html .= '<div class="nchk nchk-gray">💤 当前没有启用任何推送渠道（共 ' . (int)$res['off'] . ' 个渠道，均未启用）。</div>';
+    }
+    $html .= '<p class="nchk-foot">说明：体检读取的是<b>已保存</b>的配置（刚保存的这份），只做检查、不会发送任何消息；改完记得点「💾 保存并重启容器」让配置生效。</p>';
+    $html .= '</div>';
+    return $html;
 }
 
 /* ===== 自动更新 ===== */
@@ -1304,6 +1488,251 @@ function history_view($items) {
     return $out;
 }
 
+/* ===== 计划任务（v1.15+）=====
+ * 设计要点：
+ * - 数据存面板自己的 data/schedule.json，不写小助手的 config.yaml（那里是程序常驻时才生效的
+ *   scheduled_tasks，Docker 按需起容器的场景落不到实处）；
+ * - 由宿主机（宝塔 → 计划任务）每分钟请求一次 ?scheduler=1&key=xxx，面板自己判断是否命中时间点；
+ * - 命中判定带 30 分钟补跑窗口（兼容 cron 间隔大于 1 分钟、或服务器偶发卡顿的情况）；
+ * - 用 last_run 记录已触发的「日期+时间点」，避免同一时间点被重复触发。
+ */
+function schedule_data_file() {
+    $dir = dirname(history_data_file());
+    if (!is_dir($dir)) @mkdir($dir, 0755, true);
+    return $dir . '/schedule.json';
+}
+
+/** 默认结构；任何异常都回落到它，保证面板不会因为脏数据崩掉 */
+function schedule_default() {
+    return array('conflict' => 'skip', 'tasks' => array());
+}
+
+function schedule_load() {
+    $file = schedule_data_file();
+    if (!is_file($file)) return schedule_default();
+    $raw = @file_get_contents($file);
+    if ($raw === false || trim($raw) === '') return schedule_default();
+    $d = json_decode($raw, true);
+    if (!is_array($d)) return schedule_default();
+    $out = schedule_default();
+    if (isset($d['conflict']) && $d['conflict'] === 'stop') $out['conflict'] = 'stop';
+    if (isset($d['tasks']) && is_array($d['tasks'])) {
+        foreach ($d['tasks'] as $t) {
+            if (!is_array($t)) continue;
+            $out['tasks'][] = array(
+                'id'          => isset($t['id']) ? (string)$t['id'] : '',
+                'name'        => isset($t['name']) ? (string)$t['name'] : '',
+                'time'        => isset($t['time']) ? (string)$t['time'] : '',
+                'days'        => (isset($t['days']) && is_array($t['days'])) ? array_values($t['days']) : array(),
+                'args'        => isset($t['args']) ? (string)$t['args'] : '',
+                'enabled'     => !empty($t['enabled']),
+                'last_run'    => isset($t['last_run']) ? (string)$t['last_run'] : '',
+                'last_result' => isset($t['last_result']) ? (string)$t['last_result'] : '',
+            );
+        }
+    }
+    return $out;
+}
+
+function schedule_save($data) {
+    if (!is_array($data)) return false;
+    $json = json_encode($data, JSON_UNESCAPED_UNICODE);
+    if ($json === false) return false;
+    return @file_put_contents(schedule_data_file(), $json, LOCK_EX) !== false;
+}
+
+/** 星期清洗：仅接受 1-7（ISO，1=周一）的字符串/数字，去重后升序；空数组表示每天 */
+function schedule_normalize_days($days) {
+    $out = array();
+    if (is_array($days)) {
+        foreach ($days as $d) {
+            $n = (int)$d;
+            if ($n >= 1 && $n <= 7 && !in_array($n, $out, true)) $out[] = $n;
+        }
+    }
+    sort($out);
+    return $out;
+}
+
+/**
+ * 校验计划任务输入。
+ * @return string 空字符串表示通过；否则为错误提示。$clean 输出规范化后的数据。
+ */
+function schedule_days_label($days) {
+    $days = schedule_normalize_days($days);
+    if (!$days) return '每天';
+    $name = array(1 => '一', 2 => '二', 3 => '三', 4 => '四', 5 => '五', 6 => '六', 7 => '日');
+    $out = array();
+    foreach ($days as $n) $out[] = '周' . $name[$n];
+    return implode('、', $out);
+}
+function schedule_validate($input, &$clean = null) {
+    global $TASKS;
+    $clean = null;
+    $input = is_array($input) ? $input : array();
+
+    $name = trim((string)(isset($input['name']) ? $input['name'] : ''));
+    if ($name === '') return '任务名称不能为空';
+    // 按字符数（非字节数）限制长度：优先 mbstring，未装则用正则按 UTF-8 字符计数
+    if (function_exists('mb_strlen')) {
+        $len = mb_strlen($name, 'UTF-8');
+    } else {
+        $len = preg_match_all('/./us', $name, $tmp) ? count($tmp[0]) : strlen($name);
+    }
+    if ($len > 40) return '任务名称过长（最多 40 个字）';
+
+    $time = trim((string)(isset($input['time']) ? $input['time'] : ''));
+    if (!preg_match('/^([01]?\d|2[0-3]):[0-5]\d$/', $time)) return '时间格式不正确，请用 24 小时制（如 04:00）';
+    $tp = explode(':', $time);
+    $time = sprintf('%02d:%02d', (int)$tp[0], (int)$tp[1]);   // 规范化为 H:i
+
+    $rawDays = isset($input['days']) ? $input['days'] : array();
+    if (!is_array($rawDays)) $rawDays = array($rawDays);
+    $days = array();
+    foreach ($rawDays as $d) {
+        if (is_array($d)) return '星期选择不合法（只能选周一至周日）';
+        $s = trim((string)$d);
+        if (!preg_match('/^[1-7]$/', $s)) return '星期选择不合法（只能选周一至周日）';
+        $n = (int)$s;
+        if (!in_array($n, $days, true)) $days[] = $n;
+    }
+    sort($days);   // 空数组 = 每天
+
+    $args = trim((string)(isset($input['args']) ? $input['args'] : ''));
+    if ($args === '') return '请选择要执行的任务';
+    if (!isset($TASKS[$args])) return '任务「' . $args . '」不在可用任务列表中';
+
+    $clean = array('name' => $name, 'time' => $time, 'days' => $days, 'args' => $args);
+    return '';
+}
+
+/**
+ * 判断某条计划任务此刻是否应当触发。
+ * @param array $task 计划任务记录
+ * @param int|null $now 当前时间戳
+ * @param string $slot 命中时输出该时间点标识（Ymd-Hi），用于防重复
+ * @return bool
+ */
+function schedule_due($task, $now = null, &$slot = '') {
+    $slot = '';
+    if (!is_array($task) || empty($task['enabled'])) return false;
+    $time = trim((string)(isset($task['time']) ? $task['time'] : ''));
+    if (!preg_match('/^([01]?\d|2[0-3]):[0-5]\d$/', $time)) return false;
+    $tp = explode(':', $time);
+    $hh = (int)$tp[0];
+    $mi = (int)$tp[1];
+
+    if ($now === null) $now = time();
+    $now = (int)$now;
+
+    $days = schedule_normalize_days(isset($task['days']) ? $task['days'] : array());
+    if ($days) {
+        $w = (int)date('N', $now);        // 1=周一 … 7=周日
+        if (!in_array($w, $days, true)) return false;
+    }
+
+    $target = mktime($hh, $mi, 0, (int)date('n', $now), (int)date('j', $now), (int)date('Y', $now));
+    $diff = $now - $target;
+    if ($diff < 0) return false;                          // 今天还没到点
+    if ($diff > SCHEDULE_WINDOW_SECONDS) return false;     // 超出补跑窗口，今天不再触发
+
+    $slot = date('Ymd-Hi', $target);
+    if ((string)(isset($task['last_run']) ? $task['last_run'] : '') === $slot) return false;   // 已触发过
+    return true;
+}
+
+/**
+ * 执行一轮检查：命中即起任务。返回 JSON 友好的摘要，供 cron 接口与「立即运行一次」复用。
+ */
+function schedule_run_due($now = null) {
+    $d = schedule_load();
+    if ($now === null) $now = time();
+    $now = (int)$now;
+    $ran = array(); $skipped = array();
+    $changed = false;
+
+    $busy = null;   // 惰性判断：只在真的命中且容器在跑时才算一次
+    foreach ($d['tasks'] as $i => $t) {
+        $slot = '';
+        if (!schedule_due($t, $now, $slot)) continue;
+
+        $name = ($t['name'] !== '') ? $t['name'] : $t['id'];
+        // 先标记该时间点已处理，避免容器没起来/冲突跳过时每分钟刷屏
+        $d['tasks'][$i]['last_run'] = $slot;
+        $changed = true;
+
+        if (!container_is_running()) {
+            $d['tasks'][$i]['last_result'] = '跳过（容器未运行）';
+            $skipped[] = $name;
+            continue;
+        }
+
+        if ($busy === null) {
+            $busy = false;
+            $hist = history_sync();
+            foreach ($hist['items'] as $it) {
+                if (isset($it['status']) && $it['status'] === 'running') { $busy = true; break; }
+            }
+        }
+        if ($busy) {
+            if ($d['conflict'] === 'stop') {
+                $rr = compose('restart');
+                if ($rr['code'] !== 0) {
+                    $d['tasks'][$i]['last_result'] = '失败：停掉当前任务失败（' . trim($rr['out']) . '）';
+                    continue;
+                }
+                $busy = false;
+            } else {
+                $d['tasks'][$i]['last_result'] = '跳过（有任务在跑）';
+                $skipped[] = $name;
+                continue;
+            }
+        }
+
+        $args = (string)$t['args'];
+        $label = isset($GLOBALS['TASKS'][$args]['label']) ? $GLOBALS['TASKS'][$args]['label'] : $args;
+        $sr = task_start($args);
+        if ($sr['code'] === 0) {
+            history_add($args, $label);
+            $d['tasks'][$i]['last_result'] = '已触发';
+            $ran[] = $name;
+            $busy = true;
+        } else {
+            $d['tasks'][$i]['last_result'] = '失败：' . trim($sr['out']);
+        }
+    }
+
+    if ($changed) schedule_save($d);
+    return array(
+        'ok'      => true,
+        'time'    => date('Y-m-d H:i:s', $now),
+        'ran'     => $ran,
+        'skipped' => $skipped,
+    );
+}
+
+/**
+ * 只读统计 config.yaml 里本体自带的 scheduled_tasks 条数（用于提示用户两处不要重复配）。
+ * 只按顶层块扫描（块以顶格非该键的行或文件结尾为界），解析失败返回 0，不报错、不抛异常。
+ */
+function config_scheduled_tasks_count() {
+    $raw = config_read_raw(262144);
+    if ($raw === null || $raw === '') return 0;
+    $lines = preg_split('/\r\n|\r|\n/', $raw);
+    $inBlock = false;
+    $count = 0;
+    foreach ($lines as $line) {
+        if (!$inBlock) {
+            if (preg_match('/^scheduled_tasks\s*:/', $line)) $inBlock = true;
+            continue;
+        }
+        if (trim($line) === '') continue;
+        if (!preg_match('/^\s/', $line)) { $inBlock = false; continue; }   // 回到顶层，块结束
+        if (preg_match('/^\s*-\s*id\s*:/', $line)) $count++;
+    }
+    return $count;
+}
+
 /* ===== AJAX 请求 ===== */
 if (isset($_GET['ajax']) && is_auth()) {
     $ajax = $_GET['ajax'];
@@ -1417,6 +1846,23 @@ if (isset($_GET['monitor_sampler']) && $_GET['monitor_sampler'] === '1') {
     exit;
 }
 
+/* ===== 计划任务触发接口（v1.15+，宝塔 crontab 每分钟调用一次，必须带 key）=====
+ * 无 key / key 不匹配一律 403，避免公网被人随意触发任务。
+ */
+if (isset($_GET['scheduler']) && $_GET['scheduler'] === '1') {
+    header('Content-Type: application/json; charset=utf-8');
+    $schedCfg = panel_config_load();
+    $schedKey = isset($schedCfg['scheduler_key']) ? (string)$schedCfg['scheduler_key'] : '';
+    $reqKey   = isset($_GET['key']) ? (string)$_GET['key'] : '';
+    if ($schedKey === '' || $reqKey === '' || !hash_equals($schedKey, $reqKey)) {
+        http_response_code(403);
+        echo json_encode(array('ok' => false, 'msg' => 'forbidden'), JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    echo json_encode(schedule_run_due(), JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 /* ===== 下载配置备份 ===== */
 if (isset($_GET['download']) && $_GET['download'] === 'config' && is_auth()) {
     if (!is_file(instance_config())) {
@@ -1456,6 +1902,7 @@ if (isset($_GET['export_log']) && $_GET['export_log'] === '1' && is_auth()) {
 /* ===== POST 请求处理 ===== */
 $msg = '';
 $err = '';
+$notifyCheck = null;   // v1.15+：推送配置体检结果（仅「🔍 保存并体检」提交后填充，读的是已保存的配置）
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
@@ -1685,6 +2132,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!empty($_POST['then_restart'])) {
                     $rr = compose('restart');
                     $msg .= $rr['code'] === 0 ? '。容器已重启，配置已生效。' : '。但重启失败：' . $rr['out'];
+                } elseif (!empty($_POST['then_notify_check'])) {
+                    // v1.15+：保存后立即对推送配置做一次只读体检（不发消息、不改配置）
+                    $notifyCheck = notify_health_check(yaml_read_simple());
+                    $msg .= '。🔍 已完成推送配置体检，结果见「消息推送」分组上方的体检提示。';
+                } elseif (!empty($_POST['then_notify_test'])) {
+                    // v1.15+：保存后立即发一条测试推送，方便验证推送渠道
+                    if (container_is_running()) {
+                        $nr = task_start('notify');
+                        if ($nr['code'] === 0) {
+                            history_add('notify', $TASKS['notify']['label']);
+                            $msg .= '。🔔 已发送测试推送，请在手机上确认（结果见任务历史/日志）。';
+                        } else {
+                            $msg .= '。但测试推送发送失败：' . trim($nr['out']);
+                        }
+                    } else {
+                        $msg .= '。容器未运行，配置已保存但未发送测试。';
+                    }
                 } else {
                     $msg .= '。需重启容器生效。';
                 }
@@ -1713,6 +2177,107 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 echo json_encode(array('ok' => false, 'msg' => '清空失败，请检查 data 目录写权限'), JSON_UNESCAPED_UNICODE);
             }
             exit;
+        }
+        // ===== 计划任务（v1.15+）：新增/编辑、删除、启停、冲突策略、立即运行一次 =====
+        elseif ($action === 'schedule_add') {
+            $clean = null;
+            $verr = schedule_validate(array(
+                'name' => isset($_POST['sched_name']) ? $_POST['sched_name'] : '',
+                'time' => isset($_POST['sched_time']) ? $_POST['sched_time'] : '',
+                'days' => isset($_POST['sched_days']) ? $_POST['sched_days'] : array(),
+                'args' => isset($_POST['sched_args']) ? $_POST['sched_args'] : '',
+            ), $clean);
+            if ($verr !== '') {
+                $err = '计划任务保存失败：' . $verr;
+            } else {
+                $d = schedule_load();
+                $id = trim((string)(isset($_POST['sched_id']) ? $_POST['sched_id'] : ''));
+                if ($id === '' || !preg_match('/^[A-Za-z0-9]{1,32}$/', $id)) $id = bin2hex(random_bytes(4));
+                $found = false;
+                foreach ($d['tasks'] as $i => $t) {
+                    if ($t['id'] === $id) {
+                        $d['tasks'][$i]['name'] = $clean['name'];
+                        $d['tasks'][$i]['time'] = $clean['time'];
+                        $d['tasks'][$i]['days'] = $clean['days'];
+                        $d['tasks'][$i]['args'] = $clean['args'];
+                        $found = true;
+                        break;
+                    }
+                }
+                if (!$found) {
+                    $d['tasks'][] = array(
+                        'id'          => $id,
+                        'name'        => $clean['name'],
+                        'time'        => $clean['time'],
+                        'days'        => $clean['days'],
+                        'args'        => $clean['args'],
+                        'enabled'     => true,
+                        'last_run'    => '',
+                        'last_result' => '',
+                    );
+                }
+                if (schedule_save($d)) {
+                    $msg = '计划任务「' . $clean['name'] . '」已保存：'
+                        . schedule_days_label($clean['days'])
+                        . ' ' . $clean['time'] . ' 执行 '
+                        . $TASKS[$clean['args']]['label']
+                        . '（宿主机计划任务每分钟调用面板即可触发）';
+                } else {
+                    $err = '计划任务保存失败：无法写入 data/schedule.json，请检查 data 目录写权限';
+                }
+            }
+        }
+        elseif ($action === 'schedule_del') {
+            $id = trim((string)(isset($_POST['sched_id']) ? $_POST['sched_id'] : ''));
+            $d = schedule_load();
+            $kept = array();
+            $removed = '';
+            foreach ($d['tasks'] as $t) {
+                if ($id !== '' && $t['id'] === $id) { $removed = ($t['name'] !== '' ? $t['name'] : $t['id']); continue; }
+                $kept[] = $t;
+            }
+            if ($removed === '') {
+                $err = '删除失败：没有找到该计划任务';
+            } else {
+                $d['tasks'] = $kept;
+                if (schedule_save($d)) $msg = '计划任务「' . $removed . '」已删除';
+                else $err = '删除失败：无法写入 data/schedule.json';
+            }
+        }
+        elseif ($action === 'schedule_toggle') {
+            $id = trim((string)(isset($_POST['sched_id']) ? $_POST['sched_id'] : ''));
+            $d = schedule_load();
+            $target = '';
+            foreach ($d['tasks'] as $i => $t) {
+                if ($t['id'] === $id) {
+                    $d['tasks'][$i]['enabled'] = empty($t['enabled']);
+                    $target = ($t['name'] !== '' ? $t['name'] : $t['id']) . '（' . ($d['tasks'][$i]['enabled'] ? '已启用' : '已停用') . '）';
+                    break;
+                }
+            }
+            if ($target === '') {
+                $err = '操作失败：没有找到该计划任务';
+            } else {
+                if (schedule_save($d)) $msg = '计划任务 ' . $target;
+                else $err = '操作失败：无法写入 data/schedule.json';
+            }
+        }
+        elseif ($action === 'schedule_conflict') {
+            $mode = (isset($_POST['conflict']) && $_POST['conflict'] === 'stop') ? 'stop' : 'skip';
+            $d = schedule_load();
+            $d['conflict'] = $mode;
+            if (schedule_save($d)) {
+                $msg = '冲突策略已设为：' . ($mode === 'stop' ? '停掉当前任务再执行' : '跳过本次（保留当前任务）');
+            } else {
+                $err = '保存失败：无法写入 data/schedule.json';
+            }
+        }
+        elseif ($action === 'schedule_now') {
+            $r = schedule_run_due();
+            $msg = '计划任务检查完成（' . $r['time'] . '）：触发 ' . count($r['ran']) . ' 个';
+            if (!empty($r['ran'])) $msg .= '（' . implode('、', $r['ran']) . '）';
+            if (!empty($r['skipped'])) $msg .= '，跳过 ' . count($r['skipped']) . ' 个（' . implode('、', $r['skipped']) . '）';
+            if (empty($r['ran']) && empty($r['skipped'])) $msg .= '。没有命中任何到点的计划任务（到点后 30 分钟内仍会补跑）。';
         }
         // 配置保存 - 文本模式
         elseif ($action === 'save_config_text') {
@@ -1798,6 +2363,25 @@ $cfgVals = $isAuth ? yaml_read_simple() : array();
   --radius: 14px;
   --grad: linear-gradient(135deg,#ec4899 0%,#7dd3fc 100%);
   --grad-soft: linear-gradient(135deg,rgba(236,72,153,.13),rgba(125,211,252,.13));
+  /* v1.15+ 磨砂玻璃参数（三套主题各自覆盖） */
+  --glass-bg: rgba(255,255,255,.58);
+  --glass-bg-soft: rgba(255,255,255,.40);
+  --glass-blur: blur(22px) saturate(180%);
+  --glass-blur-sm: blur(20px) saturate(180%);
+  --glass-border: rgba(255,255,255,.62);
+  --glass-highlight: inset 0 1px 0 rgba(255,255,255,.55);
+  --glass-shadow: 0 10px 34px rgba(236,72,153,.10), 0 2px 8px rgba(88,28,135,.05);
+  --glass-glow: 0 16px 42px rgba(236,72,153,.18), 0 4px 12px rgba(88,28,135,.06);
+  --glass-edge-hover: rgba(236,72,153,.42);
+  --glass-sheen: rgba(255,255,255,.46);
+  --glass-row-hover: rgba(236,72,153,.07);
+  --glass-radius: 17px;
+  --glass-radius-sm: 12px;
+  /* 背景光斑（粉 / 天蓝 / 紫） */
+  --blob-a: rgba(236,72,153,.60);
+  --blob-b: rgba(56,189,248,.55);
+  --blob-c: rgba(167,139,250,.45);
+  --blob-opacity: .62;
 }
 html[data-theme="light"] {
   --bg: #f0f2f5;
@@ -1816,6 +2400,21 @@ html[data-theme="light"] {
   --shadow: 0 1px 3px rgba(0,0,0,.08);
   --grad: linear-gradient(135deg,#6366f1 0%,#8b5cf6 100%);
   --grad-soft: linear-gradient(135deg,rgba(99,102,241,.12),rgba(139,92,246,.12));
+  /* v1.15+ 磨砂玻璃参数（亮色：更透白、更淡的光斑） */
+  --glass-bg: rgba(255,255,255,.66);
+  --glass-bg-soft: rgba(255,255,255,.52);
+  --glass-blur-sm: blur(20px) saturate(180%);
+  --glass-border: rgba(255,255,255,.80);
+  --glass-highlight: inset 0 1px 0 rgba(255,255,255,.85);
+  --glass-shadow: 0 8px 28px rgba(51,65,85,.10), 0 1px 3px rgba(51,65,85,.06);
+  --glass-glow: 0 16px 40px rgba(99,102,241,.16), 0 2px 10px rgba(51,65,85,.06);
+  --glass-edge-hover: rgba(99,102,241,.40);
+  --glass-sheen: rgba(255,255,255,.55);
+  --glass-row-hover: rgba(99,102,241,.07);
+  --blob-a: rgba(99,102,241,.38);
+  --blob-b: rgba(139,92,246,.34);
+  --blob-c: rgba(56,189,248,.30);
+  --blob-opacity: .38;
 }
 html[data-theme="dark"] {
   --bg: #171022;
@@ -1834,6 +2433,20 @@ html[data-theme="dark"] {
   --shadow: 0 8px 32px rgba(0,0,0,.35);
   --grad: linear-gradient(135deg,#f472b6 0%,#7dd3fc 100%);
   --grad-soft: linear-gradient(135deg,rgba(244,114,182,.16),rgba(125,211,252,.16));
+  /* v1.15+ 磨砂玻璃参数（深色：更明显的玻璃与光斑） */
+  --glass-bg: rgba(44,28,58,.52);
+  --glass-bg-soft: rgba(255,255,255,.06);
+  --glass-border: rgba(255,255,255,.12);
+  --glass-highlight: inset 0 1px 0 rgba(255,255,255,.10);
+  --glass-shadow: 0 12px 36px rgba(0,0,0,.42);
+  --glass-glow: 0 18px 44px rgba(0,0,0,.50), 0 0 0 1px rgba(244,114,182,.18);
+  --glass-edge-hover: rgba(244,114,182,.45);
+  --glass-sheen: rgba(255,255,255,.16);
+  --glass-row-hover: rgba(244,114,182,.10);
+  --blob-a: rgba(244,114,182,.55);
+  --blob-b: rgba(56,189,248,.42);
+  --blob-c: rgba(167,139,250,.46);
+  --blob-opacity: .55;
 }
 /* 默认主题（march7 粉→浅蓝）背景 */
 body {
@@ -1847,7 +2460,12 @@ body {
   background-attachment: fixed;
 }
 html[data-theme="light"] body {
-  background:var(--bg);
+  /* v1.15+：亮色主题也铺一层柔和渐变，让玻璃有内容可模糊 */
+  background:
+    radial-gradient(ellipse at 15% 0%, rgba(99,102,241,.10), transparent 55%),
+    radial-gradient(ellipse at 85% 100%, rgba(139,92,246,.12), transparent 55%),
+    linear-gradient(160deg,#f4f6fa 0%,#eef1f8 55%,#f4f6fa 100%);
+  background-attachment: fixed;
 }
 html[data-theme="dark"] body {
   background:
@@ -1863,7 +2481,7 @@ a { color:var(--primary); text-decoration:none; }
 .grad-text { background:var(--grad); -webkit-background-clip:text; background-clip:text; color:transparent; }
 
 /* ===== 布局 ===== */
-.layout { display:flex; min-height:100vh; }
+.layout { display:flex; min-height:100vh; position:relative; z-index:1; /* v1.15+：抬到背景光斑之上 */ }
 .content { flex:1; min-width:0; padding:24px 28px 56px; max-width:1180px; }
 
 /* ===== 侧边栏 ===== */
@@ -1933,8 +2551,8 @@ html[data-theme="dark"] .sidebar { background:rgba(30,18,40,.66); }
 
 /* ===== 页面 ===== */
 .page { display:none; }
-.page.active { display:block; animation:fadeIn .25s ease; }
-@keyframes fadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
+.page.active { display:block; animation:fadeIn .28s cubic-bezier(.22,.7,.28,1); }
+@keyframes fadeIn { from{opacity:0;transform:translateY(8px) scale(.995)} to{opacity:1;transform:none} }
 .page-head { margin-bottom:18px; }
 .page-title { font-size:22px; font-weight:800; display:flex; align-items:center; gap:8px; }
 .page-title .pt-icon { font-size:22px; }
@@ -2014,6 +2632,35 @@ html[data-theme="light"] .card { background:var(--card); }
 /* ===== 配置表单 ===== */
 .cfg-group { margin-bottom:20px; }
 .cfg-group h3 { font-size:14px; font-weight:700; margin-bottom:10px; padding-bottom:6px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:6px; }
+/* v1.15+：可折叠分组（默认收起） */
+.cfg-group h3.cfg-toggle { cursor:pointer; user-select:none; }
+.cfg-group h3.cfg-toggle:hover { color:var(--primary); }
+.cfg-caret { font-size:11px; color:var(--muted); transition:transform .24s cubic-bezier(.34,1.2,.64,1); display:inline-block; }
+.cfg-group.collapsed .cfg-caret { transform:rotate(-90deg); }
+.cfg-hint { margin-left:auto; font-size:11px; font-weight:400; color:var(--muted); }
+.cfg-group.collapsed .cfg-hint { color:var(--primary); }
+.cfg-group.collapsed .cfg-hint::after { content:'点击展开'; }
+.cfg-group:not(.collapsed) .cfg-hint::after { content:'点击收起'; }
+/* v1.15+：折叠分组用高度过渡代替 display:none 硬切（箭头旋转见 .cfg-caret） */
+.cfg-body {
+  overflow:hidden; max-height:6000px; opacity:1;
+  transition:max-height .36s cubic-bezier(.4,0,.2,1), opacity .26s ease;
+}
+.cfg-group.collapsed .cfg-body { max-height:0; opacity:0; }
+.cfg-note { font-size:11.5px; color:var(--muted); line-height:1.6; margin:-4px 0 10px; padding:8px 10px; background:rgba(236,72,153,.06); border-left:3px solid var(--primary); border-radius:6px; }
+.cfg-footnote { font-size:11.5px; color:var(--muted); line-height:1.6; margin:10px 0 0; }
+/* v1.15+：推送配置体检结果区（沿用主题变量，不引入新的配色体系） */
+.nchk-wrap { margin:0 0 14px; padding:12px 14px; border:1px solid var(--border); border-radius:12px; background:var(--card2); }
+.nchk-title { font-size:13px; font-weight:700; color:var(--text); margin-bottom:8px; }
+.nchk { padding:9px 12px; margin-bottom:8px; border:1px solid var(--border); border-radius:10px; font-size:12.5px; line-height:1.7; }
+.nchk:last-of-type { margin-bottom:0; }
+.nchk-red { background:var(--red-bg); color:var(--red); border-color:var(--red); }
+.nchk-orange { background:var(--orange-bg); color:var(--orange); border-color:var(--orange); }
+.nchk-green { background:var(--green-bg); color:var(--green); border-color:var(--green); }
+.nchk-gray { background:var(--card-solid); color:var(--muted); }
+.nchk ul { margin:6px 0 0 18px; padding:0; }
+.nchk li { margin:2px 0; }
+.nchk-foot { font-size:11.5px; color:var(--muted); line-height:1.6; margin:8px 0 0; }
 .cfg-row { display:flex; align-items:center; justify-content:space-between; padding:9px 0; gap:12px; }
 .cfg-row + .cfg-row { border-top:1px solid var(--border); }
 .cfg-label { font-size:13px; color:var(--text); flex:1; min-width:0; }
@@ -2075,7 +2722,7 @@ html[data-theme="light"] .card { background:var(--card); }
 .hl { background:#fecdd3; color:#9f1239; border-radius:3px; padding:0 2px; }
 
 /* ===== 登录页 ===== */
-.auth-wrap { min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; }
+.auth-wrap { min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; position:relative; z-index:1; /* v1.15+：抬到背景光斑之上 */ }
 .auth-card {
   background:var(--card); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px);
   border-radius:20px; padding:40px 34px; max-width:400px; width:100%;
@@ -2120,6 +2767,32 @@ html[data-theme="light"] .card { background:var(--card); }
   font-size:11.5px; font-weight:600; color:#fff;
 }
 .hist-empty { color:var(--muted); font-size:13px; }
+
+/* ===== 计划任务（v1.15+） ===== */
+.sched-table { min-width:760px; }
+.sched-table .sched-result { white-space:normal; font-size:12px; color:var(--muted); max-width:220px; }
+.sched-form { margin-top:14px; padding:14px; border:1px dashed var(--border); border-radius:12px; background:var(--card2); }
+.sched-form-row { display:flex; align-items:center; flex-wrap:wrap; gap:10px; font-size:13px; }
+.sched-form-row + .sched-form-row { margin-top:10px; }
+.sched-form-row > label { width:52px; flex-shrink:0; color:var(--muted); font-weight:600; }
+.sched-form-row input[type="text"] {
+  flex:1; min-width:180px; max-width:320px; padding:7px 12px; border:1px solid var(--border);
+  border-radius:9px; font-size:13px; background:var(--card-solid); color:var(--text); font-family:inherit;
+}
+.sched-form-row input[type="time"] {
+  padding:6px 10px; border:1px solid var(--border); border-radius:9px; font-size:13px;
+  background:var(--card-solid); color:var(--text); font-family:inherit;
+}
+.sched-hint { font-size:11.5px; color:var(--muted); }
+.sched-days { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+.sched-day { display:inline-flex; align-items:center; gap:4px; font-size:12.5px; color:var(--text); cursor:pointer; }
+.sched-day input { accent-color:var(--primary); cursor:pointer; }
+.sched-cmd-row { display:flex; align-items:center; gap:8px; margin-top:10px; }
+.sched-cmd {
+  flex:1; min-width:0; background:var(--card2); border:1px solid var(--border); border-radius:10px;
+  padding:10px 12px; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px;
+  white-space:pre-wrap; word-break:break-all; color:var(--text);
+}
 
 /* ===== 更新提醒 ===== */
 .update-banner { margin-bottom:16px; }
@@ -2195,9 +2868,253 @@ html[data-theme="light"] .card { background:var(--card); }
 .inst-form-row { display:flex; align-items:center; gap:10px; font-size:13px; }
 .inst-form-row label { width:70px; flex-shrink:0; color:var(--muted); font-weight:600; }
 .inst-form-row input[type="text"] { flex:1; }
+/* ============================================================
+   v1.15+ 视觉层收尾：磨砂玻璃质感 + 微动效
+   只改外观：不动 PHP 业务逻辑、表单字段、接口、任务与计划任务逻辑
+   ============================================================ */
+
+/* ---------- 1. 背景光斑层（给玻璃提供可模糊的内容，纯装饰、不挡交互） ---------- */
+.bg-layer {
+  position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden;
+  contain:layout paint;
+}
+.blob {
+  position:absolute; display:block; border-radius:50%;
+  filter:blur(74px); opacity:var(--blob-opacity);
+  will-change:transform;
+}
+.blob-1 {
+  width:54vmin; height:54vmin; left:-12vmin; top:-16vmin;
+  background:radial-gradient(circle at 50% 50%, var(--blob-a), transparent 70%);
+  animation:blobDrift1 26s ease-in-out infinite alternate;
+}
+.blob-2 {
+  width:60vmin; height:60vmin; right:-16vmin; bottom:-20vmin;
+  background:radial-gradient(circle at 50% 50%, var(--blob-b), transparent 70%);
+  animation:blobDrift2 34s ease-in-out infinite alternate; animation-delay:-9s;
+}
+.blob-3 {
+  width:46vmin; height:46vmin; left:34%; top:26%;
+  background:radial-gradient(circle at 50% 50%, var(--blob-c), transparent 72%);
+  animation:blobDrift3 30s ease-in-out infinite alternate; animation-delay:-17s;
+}
+/* 只动 transform，保证合成层动画、不触发重排重绘 */
+@keyframes blobDrift1 { from{transform:translate3d(0,0,0) scale(1)} to{transform:translate3d(7vmin,6vmin,0) scale(1.16)} }
+@keyframes blobDrift2 { from{transform:translate3d(0,0,0) scale(1.08)} to{transform:translate3d(-8vmin,-7vmin,0) scale(1)} }
+@keyframes blobDrift3 { from{transform:translate3d(0,0,0) scale(.92)} to{transform:translate3d(-6vmin,7vmin,0) scale(1.12)} }
+
+/* ---------- 2. 玻璃质感（统一由变量驱动） ---------- */
+/* 2.1 面板 / 卡片类容器 */
+.card,
+.mobile-topbar,
+.modal,
+.codebox,
+.task-card,
+.mon-stat,
+.mon-chart,
+.hist-table-wrap,
+.sched-form,
+.sched-cmd,
+.inst-item,
+.inst-form-wrap {
+  background:var(--glass-bg);
+  -webkit-backdrop-filter:var(--glass-blur);
+  backdrop-filter:var(--glass-blur);
+  border:1px solid var(--glass-border);
+  border-radius:var(--glass-radius);
+  box-shadow:var(--glass-highlight), var(--glass-shadow);
+}
+/* 2.2 表单控件 / 内嵌小容器（更轻的模糊，减少嵌套开销） */
+.cfg-select,
+.cfg-input-text,
+.cfg-input-num,
+.cfg-textarea,
+.yaml-editor,
+.inst-select,
+.log-filter input[type=text],
+.log-filter select,
+.sched-form-row input[type="text"],
+.sched-form-row input[type="time"] {
+  background:var(--glass-bg);
+  -webkit-backdrop-filter:var(--glass-blur-sm);
+  backdrop-filter:var(--glass-blur-sm);
+  border:1px solid var(--glass-border);
+  border-radius:var(--glass-radius-sm);
+  box-shadow:var(--glass-highlight);
+}
+/* 下拉浮层用不透明底色，避免选项看不清 */
+.cfg-select option, .inst-select option, .log-filter select option { background:var(--card-solid); color:var(--text); }
+/* 2.3 侧边栏 / 顶部栏 / 登录卡 / 状态徽章（各自保留原有圆角特征） */
+.sidebar {
+  background:var(--glass-bg);
+  -webkit-backdrop-filter:var(--glass-blur); backdrop-filter:var(--glass-blur);
+  border-right:1px solid var(--glass-border);
+  box-shadow:var(--glass-highlight), 1px 0 30px rgba(236,72,153,.06);
+}
+html[data-theme="dark"] .sidebar { background:var(--glass-bg); }
+html[data-theme="light"] .card { background:var(--glass-bg); }
+.auth-card {
+  background:var(--glass-bg);
+  -webkit-backdrop-filter:var(--glass-blur); backdrop-filter:var(--glass-blur);
+  border:1px solid var(--glass-border);
+  box-shadow:var(--glass-highlight), 0 20px 60px rgba(236,72,153,.16);
+}
+.status-badge {
+  background:var(--glass-bg);
+  -webkit-backdrop-filter:var(--glass-blur-sm); backdrop-filter:var(--glass-blur-sm);
+  border:1px solid var(--glass-border);
+  box-shadow:var(--glass-highlight);
+}
+.mobile-topbar { border-radius:var(--glass-radius); }
+/* 表格行高亮与表头也用半透明色，避免玻璃里出现一块死白 */
+.hist-table th { background:var(--glass-bg-soft); }
+.hist-table tr:hover td { background:var(--glass-row-hover); }
+/* 老浏览器兜底：不支持 backdrop-filter 时回退为不透明底，避免糊成一片 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .card, .mobile-topbar, .modal, .codebox, .task-card, .mon-stat, .mon-chart,
+  .hist-table-wrap, .sched-form, .sched-cmd, .inst-item, .inst-form-wrap,
+  .sidebar, .auth-card, .status-badge,
+  .cfg-select, .cfg-input-text, .cfg-input-num, .cfg-textarea, .yaml-editor,
+  .inst-select, .log-filter input[type=text], .log-filter select,
+  .sched-form-row input[type="text"], .sched-form-row input[type="time"] {
+    background:var(--card-solid);
+  }
+  .hist-table th { background:var(--card-solid); }
+}
+
+/* ---------- 3. 动效 ---------- */
+/* 3.1 卡片进场：淡入 + 上浮，按顺序错峰（40~70ms/张，最大 0.6s） */
+@keyframes cardIn { from{opacity:0; transform:translateY(16px)} to{opacity:1; transform:none} }
+.page > .card { animation:cardIn .5s cubic-bezier(.22,.7,.28,1) backwards; }
+.page > .card:nth-child(1)  { animation-delay:.04s; }
+.page > .card:nth-child(2)  { animation-delay:.10s; }
+.page > .card:nth-child(3)  { animation-delay:.16s; }
+.page > .card:nth-child(4)  { animation-delay:.22s; }
+.page > .card:nth-child(5)  { animation-delay:.28s; }
+.page > .card:nth-child(6)  { animation-delay:.34s; }
+.page > .card:nth-child(7)  { animation-delay:.40s; }
+.page > .card:nth-child(8)  { animation-delay:.46s; }
+.page > .card:nth-child(9)  { animation-delay:.52s; }
+.page > .card:nth-child(10) { animation-delay:.58s; }
+.page > .card:nth-child(n+11) { animation-delay:.60s; }
+.auth-card { animation:cardIn .55s cubic-bezier(.22,.7,.28,1) backwards; }
+
+/* 3.2 卡片 / 任务卡 hover：上浮 + 阴影增强 + 边框主题色微光 */
+.card {
+  position:relative; overflow:hidden;
+  transition:transform .26s cubic-bezier(.22,.7,.28,1), box-shadow .26s ease, border-color .26s ease;
+}
+.card:hover {
+  transform:translateY(-3px);
+  border-color:var(--glass-edge-hover);
+  box-shadow:var(--glass-highlight), var(--glass-glow);
+}
+.task-card { position:relative; overflow:hidden; }
+.task-card:hover {
+  transform:translateY(-3px);
+  border-color:var(--glass-edge-hover);
+  box-shadow:var(--glass-highlight), var(--glass-glow);
+}
+.mon-stat:hover { transform:translateY(-2px); }
+
+/* 3.3 卡片 hover 斜向高光掠过（只在 hover 时跑一次，不常驻） */
+.card::after, .task-card::after {
+  content:''; position:absolute; top:-12%; bottom:-12%; left:0; width:42%;
+  background:linear-gradient(100deg, transparent 0%, var(--glass-sheen) 45%, rgba(255,255,255,.05) 68%, transparent 100%);
+  transform:translateX(-140%) skewX(-14deg);
+  opacity:0; pointer-events:none;
+}
+.card:hover::after, .task-card:hover::after {
+  animation:cardSheen .72s cubic-bezier(.3,.55,.3,1) 1;
+}
+@keyframes cardSheen {
+  0%   { opacity:0;   transform:translateX(-140%) skewX(-14deg); }
+  18%  { opacity:.9;  transform:translateX(-70%)  skewX(-14deg); }
+  70%  { opacity:.55; transform:translateX(70%)   skewX(-14deg); }
+  100% { opacity:0;   transform:translateX(140%)  skewX(-14deg); }
+}
+
+/* 3.4 按钮：hover 轻提亮 / 上浮，active 回弹 */
+.btn, .logout-btn, .icon-btn { position:relative; overflow:hidden; }
+.btn {
+  transition:transform .18s cubic-bezier(.34,1.3,.64,1), box-shadow .22s ease, opacity .2s ease;
+}
+.btn::before {
+  content:''; position:absolute; inset:0; pointer-events:none; opacity:0;
+  background:linear-gradient(180deg, rgba(255,255,255,.28), rgba(255,255,255,.04));
+  transition:opacity .2s ease;
+}
+.btn:hover { opacity:1; transform:translateY(-2px); box-shadow:0 10px 22px rgba(88,28,135,.18); }
+.btn:hover::before { opacity:1; }
+.btn:active { transform:scale(.97); box-shadow:none; }
+.logout-btn { transition:transform .18s cubic-bezier(.34,1.3,.64,1), box-shadow .2s ease; }
+.logout-btn:hover { transform:translateY(-1px); box-shadow:0 8px 18px rgba(236,72,153,.28); }
+.logout-btn:active { transform:scale(.97); }
+.icon-btn { transition:transform .18s cubic-bezier(.34,1.3,.64,1), background .2s ease, border-color .2s ease, box-shadow .2s ease; }
+.icon-btn:hover { transform:translateY(-1px); box-shadow:0 6px 16px rgba(236,72,153,.16); }
+.icon-btn:active { transform:scale(.94); }
+/* 复制成功 / 失败的短暂反馈（由 copyText 追加 class，不改变其原有行为） */
+.btn.copy-ok, .btn.copy-ok:hover { background:var(--green); color:#fff; }
+.btn.copy-ok { animation:copyPop .42s cubic-bezier(.34,1.4,.64,1) 1; }
+.btn.copy-fail, .btn.copy-fail:hover { background:var(--red); color:#fff; }
+.btn.copy-fail { animation:copyPop .42s cubic-bezier(.34,1.4,.64,1) 1; }
+@keyframes copyPop { 0%{transform:scale(1)} 45%{transform:scale(1.06)} 100%{transform:scale(1)} }
+
+/* 3.5 侧边栏导航：hover 微位移 + 左侧高亮条（scaleY 过渡） */
+.nav-item {
+  position:relative;
+  transition:background .18s ease, color .18s ease, transform .2s cubic-bezier(.22,.7,.28,1);
+}
+.nav-item::before {
+  content:''; position:absolute; left:5px; top:50%; width:3px; height:20px; border-radius:3px;
+  background:var(--grad); opacity:0;
+  transform:translateY(-50%) scaleY(0); transform-origin:50% 50%;
+  transition:transform .22s cubic-bezier(.34,1.2,.64,1), opacity .2s ease;
+}
+.nav-item:hover { transform:translateX(3px); }
+.nav-item:hover::before { opacity:.65; transform:translateY(-50%) scaleY(.6); }
+.nav-item.active::before { opacity:1; transform:translateY(-50%) scaleY(1); }
+.nav-item:active { transform:translateX(3px) scale(.99); }
+
+/* 3.6 开关滑块过渡更顺滑 */
+.switch .slider { transition:background .26s cubic-bezier(.4,0,.2,1); }
+.switch .slider:before { transition:transform .26s cubic-bezier(.34,1.4,.5,1); }
+
+/* 3.7 资源监控卡片与任务卡片的轻量反馈 */
+.mon-stat, .task-card { transition:transform .22s cubic-bezier(.22,.7,.28,1), box-shadow .22s ease, border-color .22s ease; }
+.codebox { transition:box-shadow .26s ease, border-color .26s ease; }
+.card:hover .codebox { border-color:var(--glass-edge-hover); }
+
+/* ---------- 4. 移动端：光斑减到 2 个 ---------- */
+@media (max-width:899px) {
+  .blob-3 { display:none; }
+  .blob { filter:blur(60px); }
+  .sidebar { box-shadow:0 0 40px rgba(0,0,0,.24); }
+}
+
+/* ---------- 5. 降低动态效果偏好：只保留即时状态变化 ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .blob { animation:none !important; }
+  .page.active, .page > .card, .auth-card, .card::after, .task-card::after,
+  .status-badge.running .dot, .btn.copy-ok, .btn.copy-fail { animation:none !important; }
+  .page > .card, .auth-card { opacity:1 !important; transform:none !important; }
+  .card::after, .task-card::after { display:none !important; }
+  *, *::before, *::after {
+    transition-duration:.001ms !important;
+    animation-duration:.001ms !important;
+    animation-iteration-count:1 !important;
+  }
+}
 </style>
 </head>
 <body>
+
+<!-- v1.15+：磨砂玻璃背景光斑层（纯装饰，pointer-events:none，不参与交互） -->
+<div class="bg-layer" aria-hidden="true">
+  <span class="blob blob-1"></span>
+  <span class="blob blob-2"></span>
+  <span class="blob blob-3"></span>
+</div>
 
 <?php if (!$isAuth): ?>
 <!-- ===== 登录页 ===== -->
@@ -2503,6 +3420,120 @@ html[data-theme="light"] .card { background:var(--card); }
         <p class="tip" style="margin:10px 0 0;">面板记录每次任务的开始时间与耗时；小助手日志里没有明确的结束标记，运行中的任务以「日志静默超过 <?php echo (int)HISTORY_IDLE_SECONDS; ?> 秒」判定结束、以「容器未运行且日志长时间无更新」判定中断。最多保留最近 <?php echo (int)HISTORY_KEEP; ?> 条，按实例分别保存在 <code>data/history_容器名.json</code>。</p>
       </div>
 
+      <!-- v1.15+：计划任务（由宿主机 cron 每分钟调用面板触发，不依赖程序常驻） -->
+      <div class="card">
+        <?php
+        $schedData = schedule_load();
+        $schedCfg  = panel_config_load();
+        if (empty($schedCfg['scheduler_key'])) {
+            $schedCfg['scheduler_key'] = bin2hex(random_bytes(8));
+            panel_config_save(array('scheduler_key' => $schedCfg['scheduler_key']));
+        }
+        $_schedScheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+        $_schedBase   = $_schedScheme . '://' . ($_SERVER['HTTP_HOST'] ?? 'localhost') . rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? '/'), '/\\');
+        $_schedCron   = 'curl -s "' . $_schedBase . '/index.php?scheduler=1&key=' . $schedCfg['scheduler_key'] . '" >/dev/null 2>&1';
+        $_schedBuiltin = config_scheduled_tasks_count();
+        $_schedDayName = array(1 => '一', 2 => '二', 3 => '三', 4 => '四', 5 => '五', 6 => '六', 7 => '日');
+        ?>
+        <h2><span class="icon">⏰</span> 计划任务
+          <span class="badge" style="background:var(--primary-soft);color:var(--primary);">共 <?php echo count($schedData['tasks']); ?> 条 · 启用 <?php
+            $schedEnabled = 0;
+            foreach ($schedData['tasks'] as $st) { if (!empty($st['enabled'])) $schedEnabled++; }
+            echo (int)$schedEnabled;
+          ?> 条</span>
+          <form method="post" style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;">
+            <?php echo csrf_field(); ?>
+            <input type="hidden" name="action" value="schedule_conflict">
+            <span style="font-size:12px;color:var(--muted);">有任务在跑时</span>
+            <select name="conflict" class="cfg-select" style="min-width:170px;font-size:12px;" onchange="this.form.submit()">
+              <option value="skip"<?php echo $schedData['conflict'] === 'skip' ? ' selected' : ''; ?>>跳过本次</option>
+              <option value="stop"<?php echo $schedData['conflict'] === 'stop' ? ' selected' : ''; ?>>停掉当前任务再跑</option>
+            </select>
+          </form>
+        </h2>
+
+        <div class="hist-table-wrap">
+          <table class="hist-table sched-table">
+            <thead><tr><th>名称</th><th>时间</th><th>星期</th><th>任务</th><th>状态</th><th>上次结果</th><th style="text-align:right;">操作</th></tr></thead>
+            <tbody>
+              <?php if (!$schedData['tasks']): ?>
+              <tr><td colspan="7" class="hist-empty">还没有计划任务，填写下面的表单即可添加（例如每天 04:00 跑一次「每日实训」）</td></tr>
+              <?php else: foreach ($schedData['tasks'] as $st):
+                  $stLabel = isset($TASKS[$st['args']]) ? $TASKS[$st['args']]['label'] : ($st['args'] . '（已失效）');
+                  $stDays = schedule_normalize_days($st['days']);
+                  $stDayText = schedule_days_label($stDays);
+              ?>
+              <tr>
+                <td><?php echo h($st['name'] !== '' ? $st['name'] : $st['id']); ?></td>
+                <td><?php echo h($st['time']); ?></td>
+                <td><?php echo h($stDayText); ?></td>
+                <td><?php echo h($stLabel); ?></td>
+                <td>
+                  <?php if (!empty($st['enabled'])): ?>
+                  <span class="hist-badge" style="background:var(--green);">已启用</span>
+                  <?php else: ?>
+                  <span class="hist-badge" style="background:#94a3b8;">已停用</span>
+                  <?php endif; ?>
+                </td>
+                <td class="sched-result"><?php echo h($st['last_result'] !== '' ? $st['last_result'] : '--'); ?></td>
+                <td style="text-align:right;">
+                  <form method="post" style="display:inline-flex;gap:6px;">
+                    <?php echo csrf_field(); ?>
+                    <input type="hidden" name="sched_id" value="<?php echo h($st['id']); ?>">
+                    <button type="submit" class="btn small <?php echo !empty($st['enabled']) ? 'gray' : 'green'; ?>" name="action" value="schedule_toggle"><?php echo !empty($st['enabled']) ? '⏸ 停用' : '▶ 启用'; ?></button>
+                    <button type="submit" class="btn small red" name="action" value="schedule_del" onclick="return confirm('删除计划任务「<?php echo h($st['name'] !== '' ? $st['name'] : $st['id']); ?>」？');">🗑 删除</button>
+                  </form>
+                </td>
+              </tr>
+              <?php endforeach; endif; ?>
+            </tbody>
+          </table>
+        </div>
+
+        <form method="post" class="sched-form">
+          <?php echo csrf_field(); ?>
+          <div class="sched-form-row">
+            <label>名称</label>
+            <input type="text" name="sched_name" maxlength="40" placeholder="如 每日全量" required>
+          </div>
+          <div class="sched-form-row">
+            <label>时间</label>
+            <input type="time" name="sched_time" value="04:00" required>
+            <span class="sched-hint">24 小时制；以服务器时区为准</span>
+          </div>
+          <div class="sched-form-row">
+            <label>星期</label>
+            <div class="sched-days">
+              <?php foreach ($_schedDayName as $dn => $dc): ?>
+              <label class="sched-day"><input type="checkbox" name="sched_days[]" value="<?php echo (int)$dn; ?>"><span>周<?php echo h($dc); ?></span></label>
+              <?php endforeach; ?>
+              <span class="sched-hint">都不勾选 = 每天执行</span>
+            </div>
+          </div>
+          <div class="sched-form-row">
+            <label>任务</label>
+            <select name="sched_args" class="cfg-select">
+              <?php foreach ($TASKS as $key => $t): ?>
+              <option value="<?php echo h($key); ?>"><?php echo h($t['icon'] . ' ' . $t['label']); ?></option>
+              <?php endforeach; ?>
+            </select>
+            <button type="submit" class="btn primary small" name="action" value="schedule_add">➕ 添加计划任务</button>
+            <button type="submit" class="btn orange small" name="action" value="schedule_now" formnovalidate>▶️ 立即运行一次</button>
+          </div>
+        </form>
+
+        <p class="tip" style="margin:12px 0 0;">原理：宿主机（宝塔 → 计划任务 → 添加 Shell 脚本）<b>每分钟</b>调用一次下面的命令，面板自己判断是否到了设定的时间点并启动任务，所以<b>不依赖小助手常驻</b>。到点后 30 分钟内仍会补跑（避免 cron 间隔或服务器卡顿导致漏跑）；同一时间点只触发一次，重复调用不会重复开任务。
+          <?php if ($_schedBuiltin > 0): ?>
+          <br>检测到 config.yaml 里本体自带的 <code>scheduled_tasks</code> 有 <b><?php echo (int)$_schedBuiltin; ?> 条</b>：那套定时任务只在程序常驻运行时生效，Docker 按需起容器的场景建议改用这里的计划任务，避免两处重复触发。
+          <?php endif; ?>
+        </p>
+        <div class="sched-cmd-row">
+          <code id="schedCronCmd" class="sched-cmd"><?php echo h($_schedCron); ?></code>
+          <button type="button" class="btn small gray" onclick="copyText('schedCronCmd', this)">📋 复制</button>
+        </div>
+        <p class="tip" style="margin:8px 0 0;"><span style="color:var(--muted);font-size:12px;">提示：命令里的地址会自动取你当前访问面板的地址；如果服务器实际 IP 与此不同（例如用域名访问、内网/外网 IP 不一致），请把命令里的地址改成实际能访问面板的地址。命令带 key 校验，没有 key 的请求会被直接拒绝，建议面板本身也放在内网或加访问密码保护。</span></p>
+      </div>
+
       <div class="card">
         <h2><span class="icon">🔧</span> 容器操作</h2>
         <div class="btn-group">
@@ -2534,9 +3565,27 @@ html[data-theme="light"] .card { background:var(--card); }
             <?php echo csrf_field(); ?>
             <input type="hidden" name="action" value="save_config_form">
 
-            <?php foreach ($CONFIG_GROUPS as $gKey => $g): ?>
-            <div class="cfg-group">
+            <?php foreach ($CONFIG_GROUPS as $gKey => $g):
+                /* v1.15+：分组支持 'collapsed' => true（默认收起，点标题展开）与 'note' => 分组说明；
+                   未标记 collapsed 的分组渲染结果与旧版完全一致。 */
+                $gCollapsed = !empty($g['collapsed']);
+                /* v1.15+：「🔍 保存并体检」的结果渲染在「消息推送」分组上方的提示区 */
+                if ($gKey === 'notify' && $notifyCheck !== null) echo notify_check_html($notifyCheck);
+            ?>
+            <div class="cfg-group<?php echo $gCollapsed ? ' collapsed' : ''; ?>" id="cfgGroup-<?php echo h($gKey); ?>">
+              <?php if ($gCollapsed): ?>
+              <h3 class="cfg-toggle" onclick="toggleCfgGroup('<?php echo h($gKey); ?>')">
+                <span class="cfg-caret">▾</span>
+                <?php echo h($g['icon'] . ' ' . $g['title']); ?>
+                <span class="cfg-hint"></span>
+              </h3>
+              <?php else: ?>
               <h3><?php echo h($g['icon'] . ' ' . $g['title']); ?></h3>
+              <?php endif; ?>
+              <?php if (!empty($g['note'])): ?>
+              <p class="cfg-note"><?php echo h($g['note']); ?></p>
+              <?php endif; ?>
+              <div class="cfg-body">
               <?php foreach ($g['fields'] as $fKey => $f):
                   $curVal = $cfgVals[$fKey] ?? '';
                   $curValClean = trim($curVal, "\"'");
@@ -2573,12 +3622,16 @@ html[data-theme="light"] .card { background:var(--card); }
               </div>
               <?php endforeach; ?>
             </div>
+            </div>
             <?php endforeach; ?>
 
             <div class="btn-group" style="margin-top:16px;">
               <button type="submit" class="btn green">💾 保存配置</button>
               <button type="button" class="btn orange" onclick="restartAfterSave()">💾 保存并重启容器</button>
+              <button type="submit" class="btn blue" name="then_notify_test" value="1">🔔 保存并发送测试推送</button>
+              <button type="submit" class="btn green" name="then_notify_check" value="1">🔍 保存并体检</button>
             </div>
+            <p class="cfg-footnote">提示：「🔔 保存并发送测试推送」会先保存本页配置，再向小助手发一条测试通知，用于验证推送渠道是否配通（结果看任务历史或日志）。「🔍 保存并体检」同样先保存本页配置，然后只做只读检查：告诉你哪些渠道真正会发出去、哪些启用了却缺必填项，结果直接显示在「消息推送」分组上方（不会发送任何消息）。</p>
           </form>
         </div>
 
@@ -2785,6 +3838,48 @@ function switchCfgTab(name) {
   document.querySelectorAll('.cfg-tab').forEach(function(el) { el.classList.remove('active'); });
   document.getElementById('cfgPanel-' + name).classList.add('active');
   event.target.classList.add('active');
+}
+
+/* ===== v1.15+：折叠分组展开 / 收起 ===== */
+function toggleCfgGroup(key) {
+  var el = document.getElementById('cfgGroup-' + key);
+  if (el) el.classList.toggle('collapsed');
+}
+
+/* ===== v1.15+：复制文本（clipboard 优先，失败回退 execCommand） ===== */
+function copyText(inputId, btn) {
+  var el = document.getElementById(inputId);
+  if (!el) return;
+  var text = (el.innerText !== undefined && el.innerText !== null && el.innerText !== '') ? el.innerText : el.textContent;
+  text = (text || '').trim();
+  var old = btn ? btn.textContent : '';
+  var done = function(ok) {
+    if (!btn) return;
+    btn.textContent = ok ? '✅ 已复制' : '❌ 复制失败';
+    /* v1.15+：追加视觉反馈（变绿 + 轻微弹一下），原有行为不变 */
+    btn.classList.remove('copy-ok', 'copy-fail');
+    btn.classList.add(ok ? 'copy-ok' : 'copy-fail');
+    setTimeout(function() { btn.classList.remove('copy-ok', 'copy-fail'); }, 1200);
+    setTimeout(function() { btn.textContent = old; }, 1800);
+  };
+  var fallback = function() {
+    try {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      done(ok);
+    } catch (e) { done(false); }
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function(){ done(true); }).catch(fallback);
+  } else {
+    fallback();
+  }
 }
 
 /* ===== 自动更新检查 ===== */
@@ -3353,6 +4448,41 @@ function askDeleteInst(it) {
   var d = document.createElement('input'); d.type = 'hidden'; d.name = 'inst_confirm'; d.value = name; form.appendChild(d);
   document.body.appendChild(form); form.submit();
 }
+
+/* ===== v1.15+：折叠分组的高度过渡（独立视觉增强，不改变 toggleCfgGroup 行为） =====
+   纯 CSS 已能用 max-height 过渡；这里在能测到真实高度时用实测值，窗口缩放时交回 CSS，避免内容被裁切。 */
+(function initCfgCollapseMotion() {
+  var bodies = document.querySelectorAll('.cfg-group .cfg-body');
+  if (!bodies.length) return;
+  var findGroup = function(el) {
+    var g = el.parentNode;
+    while (g && g.nodeType === 1 && !(g.classList && g.classList.contains('cfg-group'))) g = g.parentNode;
+    return (g && g.nodeType === 1) ? g : null;
+  };
+  var sync = function(body, group) {
+    if (group.classList.contains('collapsed')) { body.style.maxHeight = '0px'; return; }
+    if (body.scrollHeight > 0) { body.style.maxHeight = (body.scrollHeight + 24) + 'px'; }
+    else { body.style.maxHeight = ''; }
+  };
+  Array.prototype.forEach.call(bodies, function(body) {
+    var group = findGroup(body);
+    if (!group) return;
+    sync(body, group);
+    var head = group.querySelector('h3.cfg-toggle');
+    if (!head) return;
+    head.addEventListener('click', function() {
+      window.requestAnimationFrame(function() { sync(body, group); });
+    });
+  });
+  window.addEventListener('resize', function() {
+    Array.prototype.forEach.call(bodies, function(body) {
+      var group = findGroup(body);
+      if (!group) return;
+      if (group.classList.contains('collapsed')) body.style.maxHeight = '0px';
+      else body.style.maxHeight = '';
+    });
+  });
+})();
 </script>
 </body>
 </html>
