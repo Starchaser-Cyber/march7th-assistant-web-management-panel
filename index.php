@@ -1,7 +1,7 @@
 <?php
 /**
- * March7th Assistant 网页管理面板 v1.12
- * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询 + 多实例切换 + 货币战争 + 停止任务 + 停止循环 + 停止容器 + 镜像检查 + 更新模式 + 更新分类 + 通知自动消失 + 小助手镜像加速更新 + 镜像版本精准检查
+ * March7th Assistant 网页管理面板 v1.14
+ * 现代化 UI + 图形化配置编辑 + 实时状态 + 配置备份恢复 + 多镜像下载 + 日志高级查询 + 多实例切换 + 货币战争 + 停止任务 + 停止循环 + 停止容器 + 镜像检查 + 更新模式 + 更新分类 + 通知自动消失 + 小助手镜像加速更新 + 镜像版本精准检查 + 资源监控 + 版本备份回滚 + 任务执行历史
  * 纯原生 PHP 单文件 · 宝塔友好
  */
 declare(strict_types=1);
@@ -19,13 +19,26 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.13.1');           // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.14');           // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
 define('UPDATE_OWNER', 'starchaser-cyber');          // 仓库所有者
 define('UPDATE_REPO', 'march7th-assistant-web-management-panel');          // 仓库名
 define('UPDATE_BRANCH', 'main');             // 仓库分支
+
+/* ===== 版本备份 / 回滚（v1.14+） =====
+ * 面板自动更新前会把当前 index.php 备份到 BACKUP_DIR，只保留最近 BACKUP_KEEP 份，
+ * 更新出问题可在面板上一键回滚。
+ */
+define('BACKUP_DIR', __DIR__ . '/backups');  // 版本备份目录（自动创建）
+define('BACKUP_KEEP', 5);                    // 备份最多保留份数
+
+/* ===== 任务执行历史（v1.14+） =====
+ * 每次启动任务记一条 running 记录，靠日志文件的静默时间判定任务是否结束。
+ */
+define('HISTORY_IDLE_SECONDS', 90);          // 日志静默超过该秒数视为任务已结束
+define('HISTORY_KEEP', 200);                 // 历史最多保留条数
 
 /* ===== 任务白名单 ===== */
 $TASKS = array(
@@ -675,15 +688,16 @@ function do_update() {
             $errors[] = $src . '内容校验失败';
             continue;
         }
-        $bak = __DIR__ . '/index.php.bak.' . date('YmdHis');
-        if (!@copy(__FILE__, $bak)) {
-            return array('ok' => false, 'msg' => '备份当前文件失败，已中止更新');
+        // v1.14：覆盖前先把当前版本备份到 backups/（保留最近 BACKUP_KEEP 份），出问题可一键回滚
+        $bak = backup_current_index(PANEL_VERSION);
+        if ($bak === '') {
+            return array('ok' => false, 'msg' => '备份当前文件失败（请检查 backups 目录权限），已中止更新');
         }
         if (@file_put_contents(__FILE__, $content) === false) {
             @copy($bak, __FILE__);
             return array('ok' => false, 'msg' => '写入新版本失败，已回滚到备份');
         }
-        return array('ok' => true, 'msg' => '更新完成（来源：' . $src . '），页面即将刷新', 'bak' => basename($bak));
+        return array('ok' => true, 'msg' => '更新完成（来源：' . $src . '），旧版本已备份为 ' . basename($bak) . '，页面即将刷新', 'bak' => basename($bak));
     }
     $detail = implode('；', $errors);
     return array('ok' => false, 'msg' => '所有更新源下载失败（' . $detail . '）。请检查服务器网络，或在服务器配置代理后重试');
@@ -1040,6 +1054,256 @@ function monitor_interval() {
     return isset($cfg['monitor_interval']) ? max(1, (int)$cfg['monitor_interval']) : 1;
 }
 
+/* ===== 通用格式化 ===== */
+function format_size($bytes) {
+    $b = (float)$bytes;
+    if ($b >= 1024 * 1024 * 1024) return round($b / 1024 / 1024 / 1024, 1) . ' GB';
+    if ($b >= 1024 * 1024) return round($b / 1024 / 1024, 1) . ' MB';
+    if ($b >= 1024) return round($b / 1024, 1) . ' KB';
+    return (int)$b . ' B';
+}
+function format_duration($seconds) {
+    $s = max(0, (int)$seconds);
+    if ($s >= 3600) return floor($s / 3600) . ' 小时 ' . floor($s % 3600 / 60) . ' 分';
+    if ($s >= 60)   return floor($s / 60) . ' 分 ' . ($s % 60) . ' 秒';
+    return $s . ' 秒';
+}
+
+/* ===== 版本备份 / 一键回滚（v1.14+） ===== */
+
+/** 备份目录（不存在则创建，避免告警） */
+function backups_dir() {
+    $dir = BACKUP_DIR;
+    if (!is_dir($dir)) @mkdir($dir, 0755, true);
+    return $dir;
+}
+
+/** 扫描 backups/ 返回备份列表，按时间倒序；文件名格式 index_{版本}_{YmdHis}.php */
+function backups_list() {
+    $out = array();
+    $dir = backups_dir();
+    if (!is_dir($dir)) return $out;
+    $files = glob($dir . '/index_*.php');
+    if (!$files) return $out;
+    foreach ($files as $f) {
+        if (!is_file($f)) continue;
+        $base = basename($f);
+        if (!preg_match('/^index_(.*)_(\d{14})\.php$/', $base, $m)) continue;
+        $ver = ($m[1] !== '' && $m[1] !== null) ? $m[1] : '未知';
+        $ts = mktime(
+            (int)substr($m[2], 8, 2), (int)substr($m[2], 10, 2), (int)substr($m[2], 12, 2),
+            (int)substr($m[2], 4, 2), (int)substr($m[2], 6, 2), (int)substr($m[2], 0, 4)
+        );
+        if ($ts === false || $ts <= 0) $ts = (int)@filemtime($f);
+        $out[] = array(
+            'file'    => $base,
+            'path'    => $f,
+            'version' => $ver,
+            'time'    => $ts,
+            'timeStr' => $ts > 0 ? date('Y-m-d H:i:s', $ts) : '未知',
+            'size'    => (int)@filesize($f),
+        );
+    }
+    usort($out, function($a, $b) {
+        if ($a['time'] === $b['time']) return strcmp($b['file'], $a['file']);
+        return $b['time'] - $a['time'];
+    });
+    return $out;
+}
+
+/** 只保留最近 $keep 份备份（按时间倒序），返回删除份数 */
+function backups_prune($keep = BACKUP_KEEP) {
+    $keep = max(1, (int)$keep);
+    $list = backups_list();
+    if (count($list) <= $keep) return 0;
+    $removed = 0;
+    foreach (array_slice($list, $keep) as $item) {
+        if (!empty($item['path']) && @unlink($item['path'])) $removed++;
+    }
+    return $removed;
+}
+
+/**
+ * 备份当前 index.php 到 backups/index_{版本}_{YmdHis}.php，并清理旧备份。
+ * 成功返回备份文件绝对路径，失败返回 ''。
+ */
+function backup_current_index($version = '') {
+    $dir = backups_dir();
+    if (!is_dir($dir)) return '';
+    $ver = trim((string)$version);
+    if ($ver === '') $ver = PANEL_VERSION;
+    $ver = preg_replace('/[^A-Za-z0-9._-]/', '', $ver);
+    if ($ver === '') $ver = 'unknown';
+    $file = $dir . '/index_' . $ver . '_' . date('YmdHis') . '.php';
+    $ok = @copy(__FILE__, $file);
+    if (!$ok) {
+        $content = @file_get_contents(__FILE__);
+        if ($content === false || $content === '') return '';
+        $ok = @file_put_contents($file, $content, LOCK_EX) !== false;
+    }
+    if (!$ok) return '';
+    @chmod($file, 0644);
+    backups_prune();
+    return $file;
+}
+
+/**
+ * 一键回滚：把指定备份复制为 index.php。
+ * 安全校验：仅接受 backups/index_*.php 的文件名，并二次确认文件真实路径位于备份目录内（防路径穿越）；
+ * 回滚前先把当前版本也备份一次（防手滑）。
+ */
+function backup_rollback($file) {
+    $dir = backups_dir();
+    $base = basename(trim((string)$file));
+    if ($base === '' || !preg_match('/^index_.*\.php$/', $base)) {
+        return array('ok' => false, 'msg' => '备份文件名不合法，已中止回滚');
+    }
+    $target = $dir . '/' . $base;
+    if (!is_file($target)) {
+        return array('ok' => false, 'msg' => '备份文件不存在，已中止回滚');
+    }
+    $realDir = realpath($dir);
+    $realTarget = realpath($target);
+    if ($realDir === false || $realTarget === false
+        || strpos($realTarget, rtrim($realDir, '/\\') . DIRECTORY_SEPARATOR) !== 0) {
+        return array('ok' => false, 'msg' => '备份文件路径非法，已中止回滚');
+    }
+    $content = @file_get_contents($target);
+    if ($content === false || strlen($content) < 200 || stripos(ltrim($content), '<?php') !== 0) {
+        return array('ok' => false, 'msg' => '备份内容异常（不是有效的面板文件），已中止回滚');
+    }
+    $safety = backup_current_index(PANEL_VERSION);   // 回滚前先备份当前版本
+    if (@file_put_contents(__FILE__, $content, LOCK_EX) === false) {
+        return array('ok' => false, 'msg' => '写入 index.php 失败，请检查面板目录权限');
+    }
+    return array(
+        'ok'  => true,
+        'msg' => '已回滚到备份 ' . $base . ($safety !== '' ? '（回滚前的版本已备份为 ' . basename($safety) . '）' : '') . '，页面即将刷新',
+        'file' => $base,
+    );
+}
+
+/* ===== 任务执行历史（v1.14+） ===== */
+
+/** 历史数据文件：data/history_{容器}.json（按实例区分） */
+function history_data_file() {
+    $dir = __DIR__ . '/data';
+    if (!is_dir($dir)) @mkdir($dir, 0755, true);
+    return $dir . '/history_' . preg_replace('/[^A-Za-z0-9_-]/', '_', instance_container()) . '.json';
+}
+function history_read() {
+    $f = history_data_file();
+    if (!is_file($f)) return array('items' => array());
+    $d = @json_decode(@file_get_contents($f), true);
+    if (!is_array($d) || !isset($d['items']) || !is_array($d['items'])) return array('items' => array());
+    return array('items' => array_values($d['items']));
+}
+function history_write($d) {
+    return @file_put_contents(history_data_file(), json_encode($d, JSON_UNESCAPED_UNICODE), LOCK_EX) !== false;
+}
+
+/** 追加一条 running 记录（环形保留最近 HISTORY_KEEP 条） */
+function history_add($taskKey, $taskLabel) {
+    $d = history_read();
+    $maxId = 0;
+    foreach ($d['items'] as $it) {
+        $id = isset($it['id']) ? (int)$it['id'] : 0;
+        if ($id > $maxId) $maxId = $id;
+    }
+    $d['items'][] = array(
+        'id'         => $maxId + 1,
+        'task_key'   => (string)$taskKey,
+        'task_label' => (string)$taskLabel,
+        'instance'   => instance_container(),
+        'start_ts'   => time(),
+        'end_ts'     => 0,
+        'status'     => 'running',
+    );
+    if (count($d['items']) > HISTORY_KEEP) $d['items'] = array_slice($d['items'], -HISTORY_KEEP);
+    return history_write($d);
+}
+
+/**
+ * 结束判定：小助手不在日志里写「任务结束」标记，这里用日志静默时间推断。
+ * - 取当前实例最新日志文件 mtime，静默超过 HISTORY_IDLE_SECONDS 视为任务已结束（done，end_ts=mtime）；
+ * - 兜底：容器未运行且日志长时间未更新，视为中断（aborted）。
+ * 惰性调用：渲染或查询历史前同步一次即可。
+ */
+function history_sync() {
+    $d = history_read();
+    $now = time();
+    $logPath = latest_log_path();
+    $mtime = ($logPath && is_file($logPath)) ? (int)@filemtime($logPath) : 0;
+    $changed = false;
+    $containerRunning = null;
+    foreach ($d['items'] as $i => $it) {
+        if (!isset($it['status']) || $it['status'] !== 'running') continue;
+        $start = isset($it['start_ts']) ? (int)$it['start_ts'] : 0;
+        if ($mtime === 0) {
+            // 没有日志文件：超过两倍静默时间仍无日志，按中断处理，避免记录永远挂在「运行中」
+            if ($now - $start > HISTORY_IDLE_SECONDS * 2) {
+                $d['items'][$i]['end_ts'] = $now;
+                $d['items'][$i]['status'] = 'aborted';
+                $changed = true;
+            }
+            continue;
+        }
+        if ($now - $mtime <= HISTORY_IDLE_SECONDS) continue;         // 日志还在更新 → 任务仍在跑
+        if ($now - $start <= HISTORY_IDLE_SECONDS) continue;         // 刚启动不足静默时长，先不判定
+        if ($containerRunning === null) $containerRunning = container_is_running();
+        $end = $mtime > $start ? $mtime : $start;                    // 兜底：避免耗时出现负数
+        $d['items'][$i]['end_ts'] = $end;
+        $d['items'][$i]['status'] = (!$containerRunning && ($now - $mtime) > HISTORY_IDLE_SECONDS * 3) ? 'aborted' : 'done';
+        $changed = true;
+    }
+    if ($changed) history_write($d);
+    return $d;
+}
+
+/** 今日统计：今日执行次数 / 成功次数 */
+function history_today_stats($items) {
+    $todayStart = strtotime(date('Y-m-d 00:00:00'));
+    $count = 0; $ok = 0;
+    foreach ($items as $it) {
+        if ((int)($it['start_ts'] ?? 0) < $todayStart) continue;
+        $count++;
+        if (($it['status'] ?? '') === 'done') $ok++;
+    }
+    return array('count' => $count, 'ok' => $ok);
+}
+
+/** 历史记录 → 界面展示数据（最新在前），状态文案与颜色在各主题下通用 */
+function history_view($items) {
+    $now = time();
+    $statusMap = array(
+        'running' => array('label' => '运行中', 'color' => 'var(--blue,#3b82f6)'),
+        'done'    => array('label' => '已完成', 'color' => 'var(--green,#10b981)'),
+        'aborted' => array('label' => '已中断', 'color' => 'var(--red,#ef4444)'),
+    );
+    $out = array();
+    foreach (array_reverse($items) as $it) {
+        $start = isset($it['start_ts']) ? (int)$it['start_ts'] : 0;
+        $end   = isset($it['end_ts']) ? (int)$it['end_ts'] : 0;
+        $st    = isset($it['status']) ? (string)$it['status'] : 'running';
+        if ($st === 'running') {
+            $dur = '进行中 ' . format_duration($now - $start);
+        } else {
+            $dur = format_duration(($end > 0 ? $end : $start) - $start);
+        }
+        $s = isset($statusMap[$st]) ? $statusMap[$st] : array('label' => $st, 'color' => 'var(--muted,#9ca3af)');
+        $out[] = array(
+            'id'           => isset($it['id']) ? (int)$it['id'] : 0,
+            'task_label'   => isset($it['task_label']) ? (string)$it['task_label'] : '',
+            'start_str'    => $start > 0 ? date('m-d H:i:s', $start) : '--',
+            'duration_str' => $dur,
+            'status'       => $st,
+            'status_label' => $s['label'],
+            'status_color' => $s['color'],
+        );
+    }
+    return $out;
+}
+
 /* ===== AJAX 请求 ===== */
 if (isset($_GET['ajax']) && is_auth()) {
     $ajax = $_GET['ajax'];
@@ -1116,6 +1380,19 @@ if (isset($_GET['ajax']) && is_auth()) {
             'host'    => isset($d['meta']['host']) ? $d['meta']['host'] : monitor_host_info(),
             'lastSample' => isset($d['meta']['lastSample']) ? (int)$d['meta']['lastSample'] : 0,
             'interval'   => $iv,
+        ), JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    // 任务执行历史（v1.14+）：返回前先做一次结束判定
+    if ($ajax === 'history') {
+        header('Content-Type: application/json; charset=utf-8');
+        $d = history_sync();
+        $stats = history_today_stats($d['items']);
+        echo json_encode(array(
+            'ok'          => true,
+            'items'       => history_view($d['items']),
+            'today_count' => $stats['count'],
+            'today_ok'    => $stats['ok'],
         ), JSON_UNESCAPED_UNICODE);
         exit;
     }
@@ -1292,9 +1569,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // 任务
         elseif (isset($TASKS[$action])) {
             $r = task_start($action);
-            $msg = $r['code'] === 0
-                ? '任务「' . $TASKS[$action]['label'] . '」已后台启动'
-                : '任务启动失败：' . $r['out'];
+            if ($r['code'] === 0) {
+                // v1.14：任务启动成功记一条执行历史（状态 running，靠日志静默时间判定结束）
+                history_add($action, $TASKS[$action]['label']);
+                $msg = '任务「' . $TASKS[$action]['label'] . '」已后台启动';
+            } else {
+                $msg = '任务启动失败：' . $r['out'];
+            }
         }
         // 容器操作
         elseif ($action === 'restart') {
@@ -1415,6 +1696,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         elseif ($action === 'do_update') {
             header('Content-Type: application/json; charset=utf-8');
             echo json_encode(do_update(), JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        // 版本回滚（v1.14+）：把指定备份恢复为 index.php
+        elseif ($action === 'backup_rollback') {
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode(backup_rollback((string)($_POST['file'] ?? '')), JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        // 任务历史清空（v1.14+）
+        elseif ($action === 'history_clear') {
+            header('Content-Type: application/json; charset=utf-8');
+            if (history_write(array('items' => array()))) {
+                echo json_encode(array('ok' => true, 'msg' => '任务执行历史已清空'), JSON_UNESCAPED_UNICODE);
+            } else {
+                echo json_encode(array('ok' => false, 'msg' => '清空失败，请检查 data 目录写权限'), JSON_UNESCAPED_UNICODE);
+            }
             exit;
         }
         // 配置保存 - 文本模式
@@ -1809,6 +2106,21 @@ html[data-theme="light"] .card { background:var(--card); }
 .info-item .label { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }
 .info-item .value { font-size:16px; font-weight:700; }
 
+/* ===== 数据表格（v1.14：版本备份 / 任务历史，沿用现有主题变量） ===== */
+.hist-table-wrap { overflow-x:auto; border:1px solid var(--border); border-radius:12px; background:var(--card2); }
+.hist-table { width:100%; border-collapse:collapse; font-size:13px; }
+.hist-table th {
+  text-align:left; padding:9px 12px; font-size:11px; font-weight:600; color:var(--muted);
+  text-transform:uppercase; letter-spacing:.5px; white-space:nowrap; background:var(--card2);
+}
+.hist-table td { padding:10px 12px; border-top:1px solid var(--border); white-space:nowrap; }
+.hist-table tr:hover td { background:var(--card); }
+.hist-badge {
+  display:inline-flex; align-items:center; gap:5px; padding:3px 10px; border-radius:999px;
+  font-size:11.5px; font-weight:600; color:#fff;
+}
+.hist-empty { color:var(--muted); font-size:13px; }
+
 /* ===== 更新提醒 ===== */
 .update-banner { margin-bottom:16px; }
 .update-inner {
@@ -2088,6 +2400,33 @@ html[data-theme="light"] .card { background:var(--card); }
       </div>
 
       <div class="card">
+        <?php $bkList = backups_list(); ?>
+        <h2><span class="icon">🗂️</span> 版本备份 / 回滚
+          <span class="badge" style="background:var(--primary-soft);color:var(--primary);">保留最近 <?php echo (int)BACKUP_KEEP; ?> 份</span>
+        </h2>
+        <?php if (!$bkList): ?>
+        <p class="tip" style="margin:0;">暂无备份。面板「一键更新」覆盖 index.php 前会自动把当前版本备份到 <code>backups/</code> 目录，更新出问题时可从这里一键回滚。</p>
+        <?php else: ?>
+        <div class="hist-table-wrap">
+          <table class="hist-table">
+            <thead><tr><th>版本</th><th>备份时间</th><th>大小</th><th style="text-align:right;">操作</th></tr></thead>
+            <tbody>
+              <?php foreach ($bkList as $bk): ?>
+              <tr>
+                <td>v<?php echo h($bk['version']); ?></td>
+                <td><?php echo h($bk['timeStr']); ?></td>
+                <td><?php echo h(format_size($bk['size'])); ?></td>
+                <td style="text-align:right;"><button type="button" class="btn small orange" onclick="rollbackPanel('<?php echo h($bk['file']); ?>')">↩️ 回滚</button></td>
+              </tr>
+              <?php endforeach; ?>
+            </tbody>
+          </table>
+        </div>
+        <?php endif; ?>
+        <p class="tip" style="margin:10px 0 0;">回滚会把面板 <code>index.php</code> 恢复为所选备份；回滚前会先把当前版本也备份一次（防手滑），回滚完成后请刷新页面确认版本号。</p>
+      </div>
+
+      <div class="card">
         <h2><span class="icon">🐳</span> 三月七小助手镜像更新</h2>
         <div class="info-grid">
           <div class="info-item"><div class="label">小助手镜像</div><div class="value" id="imgStatus">检测中…</div></div>
@@ -2131,6 +2470,37 @@ html[data-theme="light"] .card { background:var(--card); }
           </div>
           <?php endforeach; ?>
         </div>
+      </div>
+
+      <div class="card">
+        <?php
+        $histData  = history_sync();
+        $histItems = history_view($histData['items']);
+        $histToday = history_today_stats($histData['items']);
+        ?>
+        <h2><span class="icon">🕒</span> 任务历史
+          <span class="badge" id="histStat" style="background:var(--primary-soft);color:var(--primary);">今日执行 <?php echo (int)$histToday['count']; ?> 次 · 成功 <?php echo (int)$histToday['ok']; ?> 次</span>
+          <button class="btn small gray" style="margin-left:auto;" onclick="clearHistory()">🗑️ 清空历史</button>
+        </h2>
+        <div class="hist-table-wrap">
+          <table class="hist-table">
+            <thead><tr><th>任务</th><th>开始时间</th><th>耗时</th><th>状态</th><th style="text-align:right;">操作</th></tr></thead>
+            <tbody id="histBody">
+              <?php if (!$histItems): ?>
+              <tr><td colspan="5" class="hist-empty">暂无任务执行记录，点击上方任务按钮即可开始记录</td></tr>
+              <?php else: foreach ($histItems as $hi): ?>
+              <tr>
+                <td><?php echo h($hi['task_label']); ?></td>
+                <td><?php echo h($hi['start_str']); ?></td>
+                <td><?php echo h($hi['duration_str']); ?></td>
+                <td><span class="hist-badge" style="background:<?php echo h($hi['status_color']); ?>;"><?php echo h($hi['status_label']); ?></span></td>
+                <td style="text-align:right;"><button type="button" class="btn small gray" onclick="histViewLog()">📝 查看日志</button></td>
+              </tr>
+              <?php endforeach; endif; ?>
+            </tbody>
+          </table>
+        </div>
+        <p class="tip" style="margin:10px 0 0;">面板记录每次任务的开始时间与耗时；小助手日志里没有明确的结束标记，运行中的任务以「日志静默超过 <?php echo (int)HISTORY_IDLE_SECONDS; ?> 秒」判定结束、以「容器未运行且日志长时间无更新」判定中断。最多保留最近 <?php echo (int)HISTORY_KEEP; ?> 条，按实例分别保存在 <code>data/history_容器名.json</code>。</p>
       </div>
 
       <div class="card">
@@ -2380,6 +2750,7 @@ function switchTab(name) {
   if (panel) panel.classList.add('active');
   try { localStorage.setItem('m7a_tab', name); } catch(e) {}
   if (name === 'log') refreshLog();
+  if (name === 'tasks') loadHistory();
   if (name === 'overview') refreshStatus();
   closeSidebar();
 }
@@ -2581,6 +2952,78 @@ function setAfterFinish(v) {
         }
       } else {
         alert('❌ ' + (d && d.msg ? d.msg : '切换失败'));
+      }
+    }).catch(function(){ alert('❌ 网络错误'); });
+}
+
+/* ===== 版本备份 / 回滚（v1.14+） ===== */
+function rollbackPanel(file) {
+  if (!file) return;
+  if (!confirm('确定回滚到备份 ' + file + '？\n当前版本会先自动备份一次，回滚后面板会刷新。')) return;
+  var fd = new FormData();
+  fd.append('action', 'backup_rollback');
+  fd.append('file', file);
+  var csrf = document.querySelector('input[name="csrf"]');
+  if (csrf) fd.append('csrf', csrf.value);
+  fetch('index.php', { method:'POST', body: fd })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d && d.ok) {
+        alert('✅ ' + d.msg);
+        location.reload();
+      } else {
+        alert('❌ ' + (d && d.msg ? d.msg : '回滚失败'));
+      }
+    }).catch(function(){ alert('❌ 网络错误，回滚未完成'); });
+}
+
+/* ===== 任务执行历史（v1.14+） ===== */
+function histViewLog() {
+  switchTab('log');
+  refreshLog();
+}
+function renderHistoryRows(items) {
+  var tb = document.getElementById('histBody');
+  if (!tb) return;
+  if (!items || !items.length) {
+    tb.innerHTML = '<tr><td colspan="5" class="hist-empty">暂无任务执行记录，点击上方任务按钮即可开始记录</td></tr>';
+    return;
+  }
+  var html = '';
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    html += '<tr>'
+      + '<td>' + escapeHtml(it.task_label || '') + '</td>'
+      + '<td>' + escapeHtml(it.start_str || '') + '</td>'
+      + '<td>' + escapeHtml(it.duration_str || '') + '</td>'
+      + '<td><span class="hist-badge" style="background:' + escapeHtml(it.status_color || '') + ';">' + escapeHtml(it.status_label || '') + '</span></td>'
+      + '<td style="text-align:right;"><button type="button" class="btn small gray" onclick="histViewLog()">📝 查看日志</button></td>'
+      + '</tr>';
+  }
+  tb.innerHTML = html;
+}
+function loadHistory() {
+  fetch('?ajax=history').then(function(r){ return r.json(); }).then(function(d){
+    if (!d || !d.ok) return;
+    var st = document.getElementById('histStat');
+    if (st) st.textContent = '今日执行 ' + d.today_count + ' 次 · 成功 ' + d.today_ok + ' 次';
+    renderHistoryRows(d.items);
+  }).catch(function(){});
+}
+function clearHistory() {
+  if (!confirm('确定清空全部任务执行历史？此操作不可恢复。')) return;
+  var fd = new FormData();
+  fd.append('action', 'history_clear');
+  var csrf = document.querySelector('input[name="csrf"]');
+  if (csrf) fd.append('csrf', csrf.value);
+  fetch('index.php', { method:'POST', body: fd })
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (d && d.ok) {
+        alert('✅ ' + d.msg);
+        loadHistory();
+      } else {
+        alert('❌ ' + (d && d.msg ? d.msg : '清空失败'));
       }
     }).catch(function(){ alert('❌ 网络错误'); });
 }
