@@ -19,7 +19,7 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.15');           // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.16');           // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -2334,7 +2334,7 @@ $cfgVals = $isAuth ? yaml_read_simple() : array();
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <title>M7A WebUI · March7th 管理面板</title>
 <style>
 /* ============================================================
@@ -2382,6 +2382,10 @@ $cfgVals = $isAuth ? yaml_read_simple() : array();
   --blob-b: rgba(56,189,248,.55);
   --blob-c: rgba(167,139,250,.45);
   --blob-opacity: .62;
+  /* v1.16+ 动效 token：统一时长与缓动曲线 */
+  --dur-1:.15s; --dur-2:.3s; --dur-3:.5s;
+  --ease:cubic-bezier(.22,.7,.28,1);
+  --ease-spring:cubic-bezier(.34,1.35,.64,1);
 }
 html[data-theme="light"] {
   --bg: #f0f2f5;
@@ -2448,6 +2452,9 @@ html[data-theme="dark"] {
   --blob-c: rgba(167,139,250,.46);
   --blob-opacity: .55;
 }
+/* v1.16+：移动端禁用下拉回弹 */
+html, body { overscroll-behavior-y:none; }
+
 /* 默认主题（march7 粉→浅蓝）背景 */
 body {
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
@@ -2508,7 +2515,7 @@ html[data-theme="dark"] .sidebar { background:rgba(30,18,40,.66); }
   display:flex; align-items:center; gap:10px; width:100%; text-align:left;
   padding:11px 14px; border:none; border-radius:10px; cursor:pointer;
   background:transparent; color:var(--muted); font-size:14px; font-weight:500;
-  transition:all .15s; font-family:inherit;
+  transition:all var(--dur-1); font-family:inherit;
 }
 .nav-item:hover { background:rgba(236,72,153,.07); color:var(--text); }
 .nav-item.active {
@@ -2524,13 +2531,15 @@ html[data-theme="dark"] .sidebar { background:rgba(30,18,40,.66); }
 .icon-btn {
   width:38px; height:38px; border-radius:10px; border:1px solid var(--border);
   background:var(--card2); color:var(--text); font-size:16px; cursor:pointer;
-  display:inline-flex; align-items:center; justify-content:center; transition:all .15s;
+  display:inline-flex; align-items:center; justify-content:center; transition:all var(--dur-1);
 }
 .icon-btn:hover { border-color:var(--primary); background:var(--primary-soft); }
 
 /* 侧边栏遮罩 & 移动端顶栏 */
 .sidebar-overlay { position:fixed; inset:0; background:rgba(30,12,40,.42); backdrop-filter:blur(2px); z-index:190; display:none; }
 .sidebar-overlay.show { display:block; }
+/* v1.16+：移动端底部导航（基础态隐藏，≤640 由手机档显示） */
+.mobile-tabbar { display:none; }
 .mobile-topbar {
   display:none; align-items:center; gap:10px; margin-bottom:16px;
   background:var(--card); backdrop-filter:blur(14px); border:1px solid var(--border);
@@ -2551,7 +2560,7 @@ html[data-theme="dark"] .sidebar { background:rgba(30,18,40,.66); }
 
 /* ===== 页面 ===== */
 .page { display:none; }
-.page.active { display:block; animation:fadeIn .28s cubic-bezier(.22,.7,.28,1); }
+.page.active { display:block; animation:fadeIn var(--dur-2) var(--ease); }
 @keyframes fadeIn { from{opacity:0;transform:translateY(8px) scale(.995)} to{opacity:1;transform:none} }
 .page-head { margin-bottom:18px; }
 .page-title { font-size:22px; font-weight:800; display:flex; align-items:center; gap:8px; }
@@ -2574,7 +2583,7 @@ html[data-theme="light"] .card { background:var(--card); }
 .msg.err { background:var(--red-bg); color:var(--red); border:1px solid var(--red); }
 
 /* ===== 按钮 ===== */
-.btn { display:inline-flex; align-items:center; gap:6px; padding:10px 20px; border:none; border-radius:10px; font-size:14px; font-weight:600; cursor:pointer; transition:all .15s; color:#fff; }
+.btn { display:inline-flex; align-items:center; gap:6px; padding:10px 20px; border:none; border-radius:10px; font-size:14px; font-weight:600; cursor:pointer; transition:all var(--dur-1); color:#fff; }
 .btn:hover { opacity:.92; transform:translateY(-1px); }
 .btn:active { transform:translateY(0); }
 .btn.primary { background:var(--grad); box-shadow:0 4px 14px rgba(236,72,153,.3); }
@@ -2635,7 +2644,7 @@ html[data-theme="light"] .card { background:var(--card); }
 /* v1.15+：可折叠分组（默认收起） */
 .cfg-group h3.cfg-toggle { cursor:pointer; user-select:none; }
 .cfg-group h3.cfg-toggle:hover { color:var(--primary); }
-.cfg-caret { font-size:11px; color:var(--muted); transition:transform .24s cubic-bezier(.34,1.2,.64,1); display:inline-block; }
+.cfg-caret { font-size:11px; color:var(--muted); transition:transform .24s var(--ease-spring); display:inline-block; }
 .cfg-group.collapsed .cfg-caret { transform:rotate(-90deg); }
 .cfg-hint { margin-left:auto; font-size:11px; font-weight:400; color:var(--muted); }
 .cfg-group.collapsed .cfg-hint { color:var(--primary); }
@@ -2809,17 +2818,23 @@ html[data-theme="light"] .card { background:var(--card); }
 .update-banner .btn.gray { background:rgba(255,255,255,.28); color:#fff; border:none; }
 .update-banner .btn.gray:hover { background:rgba(255,255,255,.4); }
 
-/* ===== 响应式 ===== */
-@media (max-width:899px) {
-  .sidebar { position:fixed; left:0; top:0; bottom:0; transform:translateX(-100%); transition:transform .3s ease; box-shadow:0 0 40px rgba(0,0,0,.2); }
+/* ===== 响应式（v1.16+：三档断点 ≤640 手机 / 641-1024 平板 / ≥1025 桌面） ===== */
+@media (max-width:640px) {
+  .sidebar { position:fixed; left:0; top:0; bottom:0; transform:translateX(-100%); transition:transform var(--dur-2) var(--ease); box-shadow:0 0 40px rgba(0,0,0,.2); }
+  .sidebar.open { transform:translateX(0); }
+  .mobile-topbar { display:flex; }
+  .content { padding:16px 16px calc(84px + env(safe-area-inset-bottom)); }
+  body { padding-bottom:env(safe-area-inset-bottom); }
+  .task-grid { grid-template-columns:1fr 1fr; }
+}
+@media (min-width:641px) and (max-width:1024px) {
+  .sidebar { position:fixed; left:0; top:0; bottom:0; transform:translateX(-100%); transition:transform var(--dur-2) var(--ease); box-shadow:0 0 40px rgba(0,0,0,.2); }
   .sidebar.open { transform:translateX(0); }
   .mobile-topbar { display:flex; }
   .content { padding:16px; }
   .task-grid { grid-template-columns:1fr 1fr; }
-  .cfg-row { flex-direction:column; align-items:flex-start; }
-  .cfg-input { align-self:flex-end; }
 }
-@media (min-width:900px) {
+@media (min-width:1025px) {
   .sidebar { transform:none; }
   .sidebar-overlay { display:none !important; }
 }
@@ -2878,30 +2893,35 @@ html[data-theme="light"] .card { background:var(--card); }
   position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden;
   contain:layout paint;
 }
+/* v1.16+ 重构：去掉大半径 filter:blur（掉帧主因），改用偏心 radial-gradient 柔边大圆；
+   动画只用 transform 旋转缩放 + opacity 微变（合成层友好），保持粉/紫双色柔光漂移观感 */
 .blob {
   position:absolute; display:block; border-radius:50%;
-  filter:blur(74px); opacity:var(--blob-opacity);
-  will-change:transform;
+  opacity:var(--blob-opacity);
+  will-change:transform, opacity;
 }
 .blob-1 {
-  width:54vmin; height:54vmin; left:-12vmin; top:-16vmin;
-  background:radial-gradient(circle at 50% 50%, var(--blob-a), transparent 70%);
-  animation:blobDrift1 26s ease-in-out infinite alternate;
+  width:78vmin; height:78vmin; left:-18vmin; top:-22vmin;
+  background:radial-gradient(circle at 42% 42%, var(--blob-a), transparent 66%);
+  animation:blobGlow1 80s ease-in-out infinite;
 }
 .blob-2 {
-  width:60vmin; height:60vmin; right:-16vmin; bottom:-20vmin;
-  background:radial-gradient(circle at 50% 50%, var(--blob-b), transparent 70%);
-  animation:blobDrift2 34s ease-in-out infinite alternate; animation-delay:-9s;
+  width:86vmin; height:86vmin; right:-22vmin; bottom:-26vmin;
+  background:radial-gradient(circle at 58% 58%, var(--blob-b), var(--blob-c) 55%, transparent 70%);
+  animation:blobGlow2 100s ease-in-out infinite; animation-delay:-32s;
 }
-.blob-3 {
-  width:46vmin; height:46vmin; left:34%; top:26%;
-  background:radial-gradient(circle at 50% 50%, var(--blob-c), transparent 72%);
-  animation:blobDrift3 30s ease-in-out infinite alternate; animation-delay:-17s;
+.blob-3 { display:none; }
+/* 只动 transform/opacity，保证合成层动画、不触发重排重绘 */
+@keyframes blobGlow1 {
+  0%   { transform:rotate(0deg) scale(1);    opacity:var(--blob-opacity); }
+  50%  { transform:rotate(180deg) scale(1.14); opacity:calc(var(--blob-opacity) * .78); }
+  100% { transform:rotate(360deg) scale(1);  opacity:var(--blob-opacity); }
 }
-/* 只动 transform，保证合成层动画、不触发重排重绘 */
-@keyframes blobDrift1 { from{transform:translate3d(0,0,0) scale(1)} to{transform:translate3d(7vmin,6vmin,0) scale(1.16)} }
-@keyframes blobDrift2 { from{transform:translate3d(0,0,0) scale(1.08)} to{transform:translate3d(-8vmin,-7vmin,0) scale(1)} }
-@keyframes blobDrift3 { from{transform:translate3d(0,0,0) scale(.92)} to{transform:translate3d(-6vmin,7vmin,0) scale(1.12)} }
+@keyframes blobGlow2 {
+  0%   { transform:rotate(0deg) scale(1.08);   opacity:calc(var(--blob-opacity) * .82); }
+  50%  { transform:rotate(-180deg) scale(1);   opacity:var(--blob-opacity); }
+  100% { transform:rotate(-360deg) scale(1.08); opacity:calc(var(--blob-opacity) * .82); }
+}
 
 /* ---------- 2. 玻璃质感（统一由变量驱动） ---------- */
 /* 2.1 面板 / 卡片类容器 */
@@ -2983,26 +3003,23 @@ html[data-theme="light"] .card { background:var(--glass-bg); }
 }
 
 /* ---------- 3. 动效 ---------- */
-/* 3.1 卡片进场：淡入 + 上浮，按顺序错峰（40~70ms/张，最大 0.6s） */
+/* 3.1 卡片进场：淡入 + 上浮，依次错开（40ms/张，backwards 填充防闪跳） */
 @keyframes cardIn { from{opacity:0; transform:translateY(16px)} to{opacity:1; transform:none} }
-.page > .card { animation:cardIn .5s cubic-bezier(.22,.7,.28,1) backwards; }
-.page > .card:nth-child(1)  { animation-delay:.04s; }
-.page > .card:nth-child(2)  { animation-delay:.10s; }
-.page > .card:nth-child(3)  { animation-delay:.16s; }
-.page > .card:nth-child(4)  { animation-delay:.22s; }
-.page > .card:nth-child(5)  { animation-delay:.28s; }
-.page > .card:nth-child(6)  { animation-delay:.34s; }
-.page > .card:nth-child(7)  { animation-delay:.40s; }
-.page > .card:nth-child(8)  { animation-delay:.46s; }
-.page > .card:nth-child(9)  { animation-delay:.52s; }
-.page > .card:nth-child(10) { animation-delay:.58s; }
-.page > .card:nth-child(n+11) { animation-delay:.60s; }
-.auth-card { animation:cardIn .55s cubic-bezier(.22,.7,.28,1) backwards; }
+.page.active .card { animation:cardIn var(--dur-3) var(--ease) backwards; }
+.page.active .card:nth-child(2) { animation-delay:.04s; }
+.page.active .card:nth-child(3) { animation-delay:.08s; }
+.page.active .card:nth-child(4) { animation-delay:.12s; }
+.page.active .card:nth-child(5) { animation-delay:.16s; }
+.page.active .card:nth-child(6) { animation-delay:.20s; }
+.page.active .card:nth-child(7) { animation-delay:.24s; }
+.page.active .card:nth-child(8) { animation-delay:.28s; }
+.page.active .card:nth-child(n+9) { animation-delay:.32s; }
+.auth-card { animation:cardIn var(--dur-3) var(--ease) backwards; }
 
 /* 3.2 卡片 / 任务卡 hover：上浮 + 阴影增强 + 边框主题色微光 */
 .card {
   position:relative; overflow:hidden;
-  transition:transform .26s cubic-bezier(.22,.7,.28,1), box-shadow .26s ease, border-color .26s ease;
+  transition:transform .26s var(--ease), box-shadow .26s ease, border-color .26s ease;
 }
 .card:hover {
   transform:translateY(-3px);
@@ -3015,6 +3032,7 @@ html[data-theme="light"] .card { background:var(--glass-bg); }
   border-color:var(--glass-edge-hover);
   box-shadow:var(--glass-highlight), var(--glass-glow);
 }
+.task-card:active { transform:scale(.98); }
 .mon-stat:hover { transform:translateY(-2px); }
 
 /* 3.3 卡片 hover 斜向高光掠过（只在 hover 时跑一次，不常驻） */
@@ -3037,7 +3055,7 @@ html[data-theme="light"] .card { background:var(--glass-bg); }
 /* 3.4 按钮：hover 轻提亮 / 上浮，active 回弹 */
 .btn, .logout-btn, .icon-btn { position:relative; overflow:hidden; }
 .btn {
-  transition:transform .18s cubic-bezier(.34,1.3,.64,1), box-shadow .22s ease, opacity .2s ease;
+  transition:transform .18s var(--ease-spring), box-shadow .22s ease, opacity .2s ease;
 }
 .btn::before {
   content:''; position:absolute; inset:0; pointer-events:none; opacity:0;
@@ -3047,29 +3065,29 @@ html[data-theme="light"] .card { background:var(--glass-bg); }
 .btn:hover { opacity:1; transform:translateY(-2px); box-shadow:0 10px 22px rgba(88,28,135,.18); }
 .btn:hover::before { opacity:1; }
 .btn:active { transform:scale(.97); box-shadow:none; }
-.logout-btn { transition:transform .18s cubic-bezier(.34,1.3,.64,1), box-shadow .2s ease; }
+.logout-btn { transition:transform .18s var(--ease-spring), box-shadow .2s ease; }
 .logout-btn:hover { transform:translateY(-1px); box-shadow:0 8px 18px rgba(236,72,153,.28); }
 .logout-btn:active { transform:scale(.97); }
-.icon-btn { transition:transform .18s cubic-bezier(.34,1.3,.64,1), background .2s ease, border-color .2s ease, box-shadow .2s ease; }
+.icon-btn { transition:transform .18s var(--ease-spring), background .2s ease, border-color .2s ease, box-shadow .2s ease; }
 .icon-btn:hover { transform:translateY(-1px); box-shadow:0 6px 16px rgba(236,72,153,.16); }
 .icon-btn:active { transform:scale(.94); }
 /* 复制成功 / 失败的短暂反馈（由 copyText 追加 class，不改变其原有行为） */
 .btn.copy-ok, .btn.copy-ok:hover { background:var(--green); color:#fff; }
-.btn.copy-ok { animation:copyPop .42s cubic-bezier(.34,1.4,.64,1) 1; }
+.btn.copy-ok { animation:copyPop .42s var(--ease-spring) 1; }
 .btn.copy-fail, .btn.copy-fail:hover { background:var(--red); color:#fff; }
-.btn.copy-fail { animation:copyPop .42s cubic-bezier(.34,1.4,.64,1) 1; }
+.btn.copy-fail { animation:copyPop .42s var(--ease-spring) 1; }
 @keyframes copyPop { 0%{transform:scale(1)} 45%{transform:scale(1.06)} 100%{transform:scale(1)} }
 
 /* 3.5 侧边栏导航：hover 微位移 + 左侧高亮条（scaleY 过渡） */
 .nav-item {
   position:relative;
-  transition:background .18s ease, color .18s ease, transform .2s cubic-bezier(.22,.7,.28,1);
+  transition:background .18s ease, color .18s ease, transform .2s var(--ease);
 }
 .nav-item::before {
   content:''; position:absolute; left:5px; top:50%; width:3px; height:20px; border-radius:3px;
   background:var(--grad); opacity:0;
   transform:translateY(-50%) scaleY(0); transform-origin:50% 50%;
-  transition:transform .22s cubic-bezier(.34,1.2,.64,1), opacity .2s ease;
+  transition:transform .22s var(--ease-spring), opacity .2s ease;
 }
 .nav-item:hover { transform:translateX(3px); }
 .nav-item:hover::before { opacity:.65; transform:translateY(-50%) scaleY(.6); }
@@ -3078,19 +3096,12 @@ html[data-theme="light"] .card { background:var(--glass-bg); }
 
 /* 3.6 开关滑块过渡更顺滑 */
 .switch .slider { transition:background .26s cubic-bezier(.4,0,.2,1); }
-.switch .slider:before { transition:transform .26s cubic-bezier(.34,1.4,.5,1); }
+.switch .slider:before { transition:transform .26s var(--ease-spring); }
 
 /* 3.7 资源监控卡片与任务卡片的轻量反馈 */
-.mon-stat, .task-card { transition:transform .22s cubic-bezier(.22,.7,.28,1), box-shadow .22s ease, border-color .22s ease; }
+.mon-stat, .task-card { transition:transform .22s var(--ease), box-shadow .22s ease, border-color .22s ease; }
 .codebox { transition:box-shadow .26s ease, border-color .26s ease; }
 .card:hover .codebox { border-color:var(--glass-edge-hover); }
-
-/* ---------- 4. 移动端：光斑减到 2 个 ---------- */
-@media (max-width:899px) {
-  .blob-3 { display:none; }
-  .blob { filter:blur(60px); }
-  .sidebar { box-shadow:0 0 40px rgba(0,0,0,.24); }
-}
 
 /* ---------- 5. 降低动态效果偏好：只保留即时状态变化 ---------- */
 @media (prefers-reduced-motion: reduce) {
@@ -3103,6 +3114,77 @@ html[data-theme="light"] .card { background:var(--glass-bg); }
     transition-duration:.001ms !important;
     animation-duration:.001ms !important;
     animation-iteration-count:1 !important;
+  }
+}
+
+/* ============================================================
+   v1.16+ 移动端适配（≤640 手机档）
+   ============================================================ */
+@media (max-width:640px) {
+  /* 表单单列（v1.15 前断点内的 cfg-row 规则迁入手机档） */
+  .cfg-row { flex-direction:column; align-items:flex-start; }
+  .cfg-input { align-self:flex-start; width:100%; }
+  .cfg-select, .cfg-input-text, .cfg-input-num { min-width:0; width:100%; }
+  .cfg-pass { min-width:0; width:100%; }
+  .cfg-textarea { min-width:0; }
+
+  /* 表格卡片化：隐藏表头，行变卡片，td::before 显示列名 */
+  .hist-table-wrap { border:none; background:transparent; }
+  .hist-table, .sched-table { min-width:0; }
+  .hist-table thead { display:none; }
+  .hist-table tr {
+    display:block; border:1px solid var(--glass-border); border-radius:12px;
+    margin-bottom:10px; background:var(--glass-bg); overflow:hidden;
+    box-shadow:var(--glass-highlight);
+  }
+  .hist-table td {
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    white-space:normal; word-break:break-all; text-align:right;
+    border-top:none; border-bottom:1px solid var(--border); padding:9px 12px;
+  }
+  .hist-table td:last-child { border-bottom:none; }
+  .hist-table td[data-label]::before {
+    content:attr(data-label); flex-shrink:0; text-align:left;
+    color:var(--muted); font-size:12px; font-weight:600;
+  }
+
+  /* 监控移动化 */
+  .mon-grid { grid-template-columns:repeat(2,1fr); }
+  .mon-chart { height:200px; }
+
+  /* 触控目标 */
+  .btn, .btn.small { min-height:44px; }
+  .icon-btn { min-height:44px; min-width:44px; }
+
+  /* 底部导航（复用 nav-item 配色体系） */
+  .mobile-tabbar {
+    display:flex; position:fixed; left:0; right:0; bottom:0; z-index:300;
+    padding:6px 8px calc(6px + env(safe-area-inset-bottom));
+    background:var(--glass-bg);
+    border-top:1px solid var(--glass-border);
+    box-shadow:0 -6px 24px rgba(236,72,153,.10);
+  }
+  .mobile-tabbar .tab-item {
+    flex:1; display:flex; flex-direction:column; align-items:center; gap:2px;
+    padding:6px 4px; border:none; border-radius:10px; background:transparent;
+    color:var(--muted); font-size:11px; font-weight:600; cursor:pointer; font-family:inherit;
+  }
+  .mobile-tabbar .tab-item .tab-icon { font-size:18px; line-height:1; }
+  .mobile-tabbar .tab-item.active {
+    background:var(--grad-soft); color:var(--primary);
+    box-shadow:inset 0 0 0 1px var(--border);
+  }
+
+  /* 性能降级：光斑静态化 + 去掉多层 backdrop-filter（保半透明纯色底） */
+  .blob { animation:none; opacity:.6; }
+  .card, .mobile-topbar, .modal, .codebox, .task-card, .mon-stat, .mon-chart,
+  .hist-table-wrap, .sched-form, .sched-cmd, .inst-item, .inst-form-wrap,
+  .sidebar, .auth-card, .status-badge,
+  .cfg-select, .cfg-input-text, .cfg-input-num, .cfg-textarea, .yaml-editor,
+  .inst-select, .log-filter input[type=text], .log-filter select,
+  .sched-form-row input[type="text"], .sched-form-row input[type="time"] {
+    -webkit-backdrop-filter:none; backdrop-filter:none;
+    background:var(--glass-bg);
   }
 }
 </style>
@@ -3330,10 +3412,10 @@ html[data-theme="light"] .card { background:var(--glass-bg); }
             <tbody>
               <?php foreach ($bkList as $bk): ?>
               <tr>
-                <td>v<?php echo h($bk['version']); ?></td>
-                <td><?php echo h($bk['timeStr']); ?></td>
-                <td><?php echo h(format_size($bk['size'])); ?></td>
-                <td style="text-align:right;"><button type="button" class="btn small orange" onclick="rollbackPanel('<?php echo h($bk['file']); ?>')">↩️ 回滚</button></td>
+                <td data-label="版本">v<?php echo h($bk['version']); ?></td>
+                <td data-label="备份时间"><?php echo h($bk['timeStr']); ?></td>
+                <td data-label="大小"><?php echo h(format_size($bk['size'])); ?></td>
+                <td data-label="操作" style="text-align:right;"><button type="button" class="btn small orange" onclick="rollbackPanel('<?php echo h($bk['file']); ?>')">↩️ 回滚</button></td>
               </tr>
               <?php endforeach; ?>
             </tbody>
@@ -3407,11 +3489,11 @@ html[data-theme="light"] .card { background:var(--glass-bg); }
               <tr><td colspan="5" class="hist-empty">暂无任务执行记录，点击上方任务按钮即可开始记录</td></tr>
               <?php else: foreach ($histItems as $hi): ?>
               <tr>
-                <td><?php echo h($hi['task_label']); ?></td>
-                <td><?php echo h($hi['start_str']); ?></td>
-                <td><?php echo h($hi['duration_str']); ?></td>
-                <td><span class="hist-badge" style="background:<?php echo h($hi['status_color']); ?>;"><?php echo h($hi['status_label']); ?></span></td>
-                <td style="text-align:right;"><button type="button" class="btn small gray" onclick="histViewLog()">📝 查看日志</button></td>
+                <td data-label="任务"><?php echo h($hi['task_label']); ?></td>
+                <td data-label="开始时间"><?php echo h($hi['start_str']); ?></td>
+                <td data-label="耗时"><?php echo h($hi['duration_str']); ?></td>
+                <td data-label="状态"><span class="hist-badge" style="background:<?php echo h($hi['status_color']); ?>;"><?php echo h($hi['status_label']); ?></span></td>
+                <td data-label="操作" style="text-align:right;"><button type="button" class="btn small gray" onclick="histViewLog()">📝 查看日志</button></td>
               </tr>
               <?php endforeach; endif; ?>
             </tbody>
@@ -3464,19 +3546,19 @@ html[data-theme="light"] .card { background:var(--glass-bg); }
                   $stDayText = schedule_days_label($stDays);
               ?>
               <tr>
-                <td><?php echo h($st['name'] !== '' ? $st['name'] : $st['id']); ?></td>
-                <td><?php echo h($st['time']); ?></td>
-                <td><?php echo h($stDayText); ?></td>
-                <td><?php echo h($stLabel); ?></td>
-                <td>
+                <td data-label="名称"><?php echo h($st['name'] !== '' ? $st['name'] : $st['id']); ?></td>
+                <td data-label="时间"><?php echo h($st['time']); ?></td>
+                <td data-label="星期"><?php echo h($stDayText); ?></td>
+                <td data-label="任务"><?php echo h($stLabel); ?></td>
+                <td data-label="状态">
                   <?php if (!empty($st['enabled'])): ?>
                   <span class="hist-badge" style="background:var(--green);">已启用</span>
                   <?php else: ?>
                   <span class="hist-badge" style="background:#94a3b8;">已停用</span>
                   <?php endif; ?>
                 </td>
-                <td class="sched-result"><?php echo h($st['last_result'] !== '' ? $st['last_result'] : '--'); ?></td>
-                <td style="text-align:right;">
+                <td data-label="上次结果" class="sched-result"><?php echo h($st['last_result'] !== '' ? $st['last_result'] : '--'); ?></td>
+                <td data-label="操作" style="text-align:right;">
                   <form method="post" style="display:inline-flex;gap:6px;">
                     <?php echo csrf_field(); ?>
                     <input type="hidden" name="sched_id" value="<?php echo h($st['id']); ?>">
@@ -3750,6 +3832,14 @@ html[data-theme="light"] .card { background:var(--glass-bg); }
     </div>
   </div>
 </div>
+
+<!-- v1.16+：移动端底部导航（≤640 显示，对应 4 个页面） -->
+<nav class="mobile-tabbar" aria-label="页面导航">
+  <button type="button" class="tab-item active" data-tab="overview" onclick="switchTab('overview')"><span class="tab-icon">📊</span><span class="tab-text">概览</span></button>
+  <button type="button" class="tab-item" data-tab="tasks" onclick="switchTab('tasks')"><span class="tab-icon">🚀</span><span class="tab-text">任务</span></button>
+  <button type="button" class="tab-item" data-tab="config" onclick="switchTab('config')"><span class="tab-icon">⚙️</span><span class="tab-text">配置</span></button>
+  <button type="button" class="tab-item" data-tab="log" onclick="switchTab('log')"><span class="tab-icon">📝</span><span class="tab-text">日志</span></button>
+</nav>
 <?php endif; ?>
 
 <script>
@@ -3798,7 +3888,7 @@ function closeSidebar() {
 /* ===== 页面切换 ===== */
 function switchTab(name) {
   document.querySelectorAll('.page').forEach(function(el) { el.classList.remove('active'); });
-  document.querySelectorAll('.nav-item').forEach(function(el) { el.classList.toggle('active', el.dataset.tab === name); });
+  document.querySelectorAll('.nav-item, .mobile-tabbar .tab-item').forEach(function(el) { el.classList.toggle('active', el.dataset.tab === name); });
   var panel = document.getElementById('panel-' + name);
   if (panel) panel.classList.add('active');
   try { localStorage.setItem('m7a_tab', name); } catch(e) {}
@@ -4088,11 +4178,11 @@ function renderHistoryRows(items) {
   for (var i = 0; i < items.length; i++) {
     var it = items[i];
     html += '<tr>'
-      + '<td>' + escapeHtml(it.task_label || '') + '</td>'
-      + '<td>' + escapeHtml(it.start_str || '') + '</td>'
-      + '<td>' + escapeHtml(it.duration_str || '') + '</td>'
-      + '<td><span class="hist-badge" style="background:' + escapeHtml(it.status_color || '') + ';">' + escapeHtml(it.status_label || '') + '</span></td>'
-      + '<td style="text-align:right;"><button type="button" class="btn small gray" onclick="histViewLog()">📝 查看日志</button></td>'
+      + '<td data-label="任务">' + escapeHtml(it.task_label || '') + '</td>'
+      + '<td data-label="开始时间">' + escapeHtml(it.start_str || '') + '</td>'
+      + '<td data-label="耗时">' + escapeHtml(it.duration_str || '') + '</td>'
+      + '<td data-label="状态"><span class="hist-badge" style="background:' + escapeHtml(it.status_color || '') + ';">' + escapeHtml(it.status_label || '') + '</span></td>'
+      + '<td data-label="操作" style="text-align:right;"><button type="button" class="btn small gray" onclick="histViewLog()">📝 查看日志</button></td>'
       + '</tr>';
   }
   tb.innerHTML = html;
@@ -4162,11 +4252,36 @@ function fmtUptime(sec) {
   if (h > 0) return h + '小时' + m + '分';
   return m + '分钟';
 }
+/* v1.16+：数字滚动（requestAnimationFrame 300ms；解析目标文本中的数字段滚动，
+   支持小数与 %/GB 等前后缀；当前为 -- 等无数字占位、或含多个数字的复合文本时直接落值不滚动） */
+function tweenNum(el, target) {
+  if (!el) return;
+  var to = String(target);
+  var cur = el.textContent || '';
+  var mTo = to.match(/^(\D*?)(-?\d+(?:\.\d+)?)(\D*)$/);
+  var mFrom = /^(\D*?)(-?\d+(?:\.\d+)?)(\D*)$/.exec(cur);
+  if (!mTo || !mFrom) { el.textContent = to; return; }
+  var from = parseFloat(mFrom[2]);
+  var toV = parseFloat(mTo[2]);
+  if (isNaN(from) || isNaN(toV)) { el.textContent = to; return; }
+  var dec = (mTo[2].indexOf('.') >= 0) ? mTo[2].split('.')[1].length : 0;
+  var token = (el._tweenTok = (el._tweenTok || 0) + 1);
+  var t0 = null;
+  function step(ts) {
+    if (el._tweenTok !== token) return;
+    if (t0 === null) t0 = ts;
+    var p = Math.min(1, (ts - t0) / 300);
+    var e = 1 - Math.pow(1 - p, 3);
+    el.textContent = mTo[1] + (from + (toV - from) * e).toFixed(dec) + mTo[3];
+    if (p < 1) window.requestAnimationFrame(step);
+  }
+  window.requestAnimationFrame(step);
+}
 function setMonStat(id, val, pct, cls) {
   var el = document.getElementById(id);
   if (!el) return;
   el.className = 'mon-stat' + (cls ? ' ' + cls : '');
-  var v = el.querySelector('.m-value'); if (v) v.textContent = val;
+  var v = el.querySelector('.m-value'); if (v) tweenNum(v, val);
   var bar = el.querySelector('.m-bar > i'); if (bar) bar.style.width = (pct || 0) + '%';
 }
 function renderMonitor(d) {
@@ -4179,10 +4294,10 @@ function renderMonitor(d) {
     setMonStat('monCpu', (last.cpu||0).toFixed(1) + '%', last.cpu, cpuCls);
     setMonStat('monMem', (last.mem||0).toFixed(1) + '%', last.mem, memCls);
     setMonStat('monDisk', (last.disk||0).toFixed(1) + '%', last.disk, diskCls);
-    document.getElementById('monLoad').querySelector('.m-value').textContent = (last.load||0).toFixed(2);
-    document.getElementById('monNet').querySelector('.m-value').textContent = '↓' + fmtSpeed(last.netIn||0);
+    tweenNum(document.querySelector('#monLoad .m-value'), (last.load||0).toFixed(2));
+    tweenNum(document.querySelector('#monNet .m-value'), '↓' + fmtSpeed(last.netIn||0));
     document.getElementById('monNetSub').textContent = '↑' + fmtSpeed(last.netOut||0);
-    document.getElementById('monUp').querySelector('.m-value').textContent = fmtUptime(last.uptime||0);
+    tweenNum(document.querySelector('#monUp .m-value'), fmtUptime(last.uptime||0));
     document.getElementById('monUpSub').textContent = d.running ? '容器：运行中' : '容器：已停止';
   }
   var h = d.host || {};
@@ -4209,7 +4324,8 @@ function renderMonitor(d) {
       else if (_monRange === '1d') { pts2 = d.minutes || []; timeFmt = {hour12:false, hour:'2-digit', minute:'2-digit'}; }
       var times = pts2.map(function(p){ return new Date(p.t*1000).toLocaleTimeString('zh-CN', timeFmt); });
       _monChart.setOption({
-        tooltip: { trigger: 'axis' },
+        tooltip: { trigger: 'axis', confine: true },
+        animationDuration: 800, animationEasing: 'cubicOut',
         legend: { data: ['CPU','内存','磁盘'], textStyle:{color:'#999'}, top:0 },
         grid: { left:42, right:16, top:34, bottom:26 },
         xAxis: { type:'category', data:times, boundaryGap:false, axisLine:{lineStyle:{color:'#999'}}, axisLabel:{color:'#999', fontSize:10} },
@@ -4249,12 +4365,15 @@ function startMonitor() {
   stopMonitor();
   loadMonitor();
   var iv = parseInt(document.getElementById('monInterval').value) || 1;
+  /* v1.16+：手机端且用户未手动设置过刷新间隔时，默认放宽到 3 秒；手动选过则尊重用户选择 */
+  if (!window._monIvTouched && window.innerWidth <= 640) iv = 3;
   _monTimer = setInterval(loadMonitor, Math.max(1, iv) * 1000);
 }
 function stopMonitor() {
   if (_monTimer) { clearInterval(_monTimer); _monTimer = null; }
 }
 function setMonitorInterval(iv) {
+  window._monIvTouched = true; /* v1.16+：标记用户已手动设置过刷新间隔 */
   var fd = new FormData();
   fd.append('action', 'set_monitor_interval');
   fd.append('interval', iv);
