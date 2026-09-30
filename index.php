@@ -1746,7 +1746,7 @@ function panel_doctor() {
         $items[] = array('name' => '面板版本', 'level' => 'info', 'msg' => '自动检查不可用（' . $msg . '），当前 v' . PANEL_VERSION);
     }
     // 9. 磁盘空间（系统盘 + /data 数据盘）
-    $df = run_cmd("df -p / /data 2>/dev/null | tail -n +2");
+    $df = run_cmd("df -B1 / /data 2>/dev/null | tail -n +2");
     $maxUse = 0; $worst = '';
     foreach (preg_split('/\r\n|\r|\n/', trim($df['out'])) as $line) {
         $cols = preg_split('/\s+/', trim($line));
