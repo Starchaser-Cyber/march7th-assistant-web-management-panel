@@ -2324,32 +2324,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-/* ===== v1.17：PWA manifest 与应用图标（query 分支输出，无需额外文件） ===== */
-if (isset($_GET['manifest'])) {
-    header('Content-Type: application/manifest+json; charset=utf-8');
-    echo json_encode(array(
-        'name' => 'M7A WebUI · 三月七管理面板',
-        'short_name' => 'M7A WebUI',
-        'description' => '浏览器里管三月七小助手：启动任务、改配置、看日志',
-        'start_url' => './',
-        'scope' => './',
-        'display' => 'standalone',
-        'background_color' => '#1a0b24',
-        'theme_color' => '#ec4899',
-        'icons' => array(
-            array('src' => '?icon=1&size=192', 'sizes' => '192x192', 'type' => 'image/png', 'purpose' => 'any maskable'),
-            array('src' => '?icon=1&size=512', 'sizes' => '512x512', 'type' => 'image/png', 'purpose' => 'any maskable'),
-        ),
-    ));
-    exit;
-}
-if (isset($_GET['icon'])) {
-    $sz = isset($_GET['size']) ? (int)$_GET['size'] : 192;
-    header('Content-Type: image/png');
-    header('Cache-Control: public, max-age=86400');
-    echo base64_decode($sz >= 400 ? M7A_ICON_512 : M7A_ICON_192);
-    exit;
-}
 define('M7A_ICON_192',
     'iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAYAAABS3GwHAAAzrklEQVR42u2deZQcxZ3nv7+IzKyqrr7v1i0hCXRwCIlDgGg1' .
     'hxHiMuOVbM/uznh3duwZv12vjXfGfm/H2+h53j57PPJ4Zj3YeMwYY2xAbVvG5kagFgaBQDICIXEYBBKSWuputfqsrqrMiN/+' .
@@ -2802,6 +2776,32 @@ define('M7A_ICON_512',
     'pmyfjAYE4A/+4A/+4G8E/n/+QRpeEQBYMSC44AN/8Ad/8Af/0PEHfAIA27aPR4MC8Ad/8Ad/Z+P/Z2BPAEB70Q68e9EH/uAP' .
     '/uBvB/z/7B/TscaE7f8H/8F0vOYW0aUAAAAASUVORK5CYII=');
 
+/* ===== v1.17：PWA manifest 与应用图标（query 分支输出，无需额外文件） ===== */
+if (isset($_GET['manifest'])) {
+    header('Content-Type: application/manifest+json; charset=utf-8');
+    echo json_encode(array(
+        'name' => 'M7A WebUI · 三月七管理面板',
+        'short_name' => 'M7A WebUI',
+        'description' => '浏览器里管三月七小助手：启动任务、改配置、看日志',
+        'start_url' => './',
+        'scope' => './',
+        'display' => 'standalone',
+        'background_color' => '#1a0b24',
+        'theme_color' => '#ec4899',
+        'icons' => array(
+            array('src' => '?icon=1&size=192', 'sizes' => '192x192', 'type' => 'image/png', 'purpose' => 'any maskable'),
+            array('src' => '?icon=1&size=512', 'sizes' => '512x512', 'type' => 'image/png', 'purpose' => 'any maskable'),
+        ),
+    ));
+    exit;
+}
+if (isset($_GET['icon'])) {
+    $sz = isset($_GET['size']) ? (int)$_GET['size'] : 192;
+    header('Content-Type: image/png');
+    header('Cache-Control: public, max-age=86400');
+    echo base64_decode($sz >= 400 ? M7A_ICON_512 : M7A_ICON_192);
+    exit;
+}
 /* ===== 页面输出 ===== */
 header('Content-Type: text/html; charset=utf-8');
 $isAuth = is_auth();
