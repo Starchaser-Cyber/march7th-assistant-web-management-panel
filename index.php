@@ -19,7 +19,7 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.17');           // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.18');           // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -1488,7 +1488,292 @@ function history_view($items) {
     return $out;
 }
 
+/* ===== v1.18：任务历史近 7 天统计（按 start_ts 落桶，done 计成功） ===== */
+function history_week_stats($items) {
+    $today = strtotime(date('Y-m-d 00:00:00'));
+    $wd = array('日', '一', '二', '三', '四', '五', '六');
+    $buckets = array();
+    for ($i = 6; $i >= 0; $i--) {
+        $ts = $today - $i * 86400;
+        $k = date('Y-m-d', $ts);
+        $buckets[$k] = array(
+            'date'  => date('m-d', $ts),
+            'wd'    => $wd[(int)date('w', $ts)],
+            'today' => $i === 0,
+            'count' => 0,
+            'ok'    => 0,
+        );
+    }
+    foreach ($items as $it) {
+        $start = isset($it['start_ts']) ? (int)$it['start_ts'] : 0;
+        if ($start <= 0) continue;
+        $k = date('Y-m-d', $start);
+        if (!isset($buckets[$k])) continue;
+        $buckets[$k]['count']++;
+        if (isset($it['status']) && $it['status'] === 'done') $buckets[$k]['ok']++;
+    }
+    return array_values($buckets);
+}
+
+/* ===== v1.18：HTTP POST（Bark 用 GET 走 http_get，Server酱/Webhook 走这里） ===== */
+function http_post($url, $fields, $timeout = 8, $asJson = false) {
+    $payload = $asJson ? json_encode($fields, JSON_UNESCAPED_UNICODE) : http_build_query($fields);
+    $out = array('code' => 0, 'body' => '');
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, array(
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $payload,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => $timeout,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_HTTPHEADER     => array($asJson ? 'Content-Type: application/json' : 'Content-Type: application/x-www-form-urlencoded'),
+        ));
+        $body = curl_exec($ch);
+        $out['code'] = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $out['body'] = $body === false ? curl_error($ch) : (string)$body;
+        curl_close($ch);
+        return $out;
+    }
+    $ctx = stream_context_create(array('http' => array(
+        'method'  => 'POST',
+        'header'  => ($asJson ? 'Content-Type: application/json' : 'Content-Type: application/x-www-form-urlencoded') . "\r\n",
+        'content' => $payload,
+        'timeout' => $timeout,
+    )));
+    $body = @file_get_contents($url, false, $ctx);
+    $out['body'] = $body === false ? 'request failed' : (string)$body;
+    if (!empty($http_response_header) && preg_match('#HTTP/\S+\s+(\d+)#', $http_response_header[0], $m)) {
+        $out['code'] = (int)$m[1];
+    }
+    return $out;
+}
+
+/* ===== v1.18：异常告警（容器意外停止 / 任务中断 → Bark / Server酱 / Webhook） ===== */
+function alert_state_file() {
+    $dir = dirname(history_data_file());
+    if (!is_dir($dir)) @mkdir($dir, 0755, true);
+    return $dir . '/alert_state.json';
+}
+function alert_state_load() {
+    $s = array('prev' => null, 'alerted_down' => false, 'quiet_until' => 0, 'last_tick' => 0, 'aborted_seen' => array());
+    $raw = @file_get_contents(alert_state_file());
+    if ($raw !== false && trim($raw) !== '') {
+        $d = json_decode($raw, true);
+        if (is_array($d)) $s = array_merge($s, $d);
+    }
+    return $s;
+}
+function alert_state_save($s) {
+    @file_put_contents(alert_state_file(), json_encode($s, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), LOCK_EX);
+}
+/** 用户在面板做了容器操作 → 静默若干秒，避免把人为操作当异常推送 */
+function alert_quiet($sec) {
+    $s = alert_state_load();
+    $s['quiet_until'] = time() + (int)$sec;
+    alert_state_save($s);
+}
+function alert_cfg() {
+    $c = panel_config_load();
+    return array(
+        'enable'  => isset($c['alert_enable']) && (string)$c['alert_enable'] === '1',
+        'channel' => isset($c['alert_channel']) ? (string)$c['alert_channel'] : 'bark',
+        'target'  => isset($c['alert_target']) ? trim((string)$c['alert_target']) : '',
+    );
+}
+/** 发一条推送；$override 非空时用调用方给的配置（测试发送用，不落盘） */
+function alert_send($title, $body, $override = null) {
+    $cfg = $override !== null ? $override : alert_cfg();
+    if (empty($cfg['enable'])) return array('ok' => false, 'msg' => '告警未启用');
+    if (!isset($cfg['target']) || $cfg['target'] === '') return array('ok' => false, 'msg' => '未配置接收地址');
+    $ch = isset($cfg['channel']) ? $cfg['channel'] : 'bark';
+    if ($ch === 'bark') {
+        $url = 'https://api.day.app/' . rawurlencode($cfg['target']) . '/' . rawurlencode($title) . '/' . rawurlencode($body);
+        $r = http_get($url, 8);
+        $code = isset($r['code']) ? (int)$r['code'] : 0;
+        return array('ok' => $code >= 200 && $code < 300, 'msg' => 'Bark 返回 HTTP ' . $code);
+    }
+    if ($ch === 'serverchan') {
+        $r = http_post('https://sctapi.ftqq.com/' . rawurlencode($cfg['target']) . '.send', array('title' => $title, 'desp' => $body), 8, false);
+        $code = (int)$r['code'];
+        return array('ok' => $code >= 200 && $code < 300, 'msg' => 'Server酱 返回 HTTP ' . $code);
+    }
+    $r = http_post($cfg['target'], array('title' => $title, 'body' => $body, 'time' => date('Y-m-d H:i:s')), 8, true);
+    $code = (int)$r['code'];
+    return array('ok' => $code >= 200 && $code < 300, 'msg' => 'Webhook 返回 HTTP ' . $code);
+}
+/** 巡检状态机：容器 up→down 推故障、down→up 推恢复、新增 aborted 记录推任务中断。
+ *  $force=true（cron 端点）绕过 45 秒节流；页面触发走节流。 */
+function alert_tick($force = false) {
+    $s = alert_state_load();
+    $now = time();
+    if (!$force && $now - (int)$s['last_tick'] < 45) return array('ok' => true, 'throttled' => true, 'pushed' => false);
+    $s['last_tick'] = $now;
+    $run = container_is_running();
+    $prev = $s['prev'];
+    $s['prev'] = $run;
+    $cfg = alert_cfg();
+    $msgs = array();
+    if (!empty($cfg['enable'])) {
+        $quiet = $now < (int)$s['quiet_until'];
+        if ($prev !== null && $prev === true && $run === false && empty($s['alerted_down']) && !$quiet) {
+            $msgs[] = "🛑 容器意外停止\n面板检测到容器已不在运行，任务可能中断。";
+            $s['alerted_down'] = true;
+        } elseif ($prev !== null && $prev === false && $run === true && !empty($s['alerted_down'])) {
+            $msgs[] = "✅ 容器已恢复\n容器已重新运行，可以正常跑任务了。";
+            $s['alerted_down'] = false;
+        }
+        // 新增中断记录：静默期内也登记（防 quiet 结束后补报），只在非静默期推送
+        $hd = history_sync();
+        foreach ($hd['items'] as $it) {
+            if (!isset($it['status']) || $it['status'] !== 'aborted') continue;
+            $id = isset($it['id']) ? (int)$it['id'] : 0;
+            if ($id <= 0 || in_array($id, $s['aborted_seen'])) continue;
+            $s['aborted_seen'][] = $id;
+            if ($quiet) continue;
+            $label = isset($it['task_label']) ? (string)$it['task_label'] : '任务';
+            $msgs[] = "⚠️ 任务中断：" . $label . "\n请到面板「日志」页查看原因。";
+        }
+        if (count($s['aborted_seen']) > 40) $s['aborted_seen'] = array_slice($s['aborted_seen'], -40);
+        if ($msgs) {
+            $r = alert_send('M7A 面板告警', implode("\n\n", $msgs));
+            alert_state_save($s);
+            return array('ok' => true, 'pushed' => !empty($r['ok']), 'run' => $run, 'msg' => isset($r['msg']) ? $r['msg'] : '');
+        }
+    }
+    alert_state_save($s);
+    return array('ok' => true, 'pushed' => false, 'run' => $run);
+}
+
+/* ===== v1.18：巡检心跳（cron 端点每次落一个时间戳，体检判断 cron 是否活着） ===== */
+function heartbeat_touch($which) {
+    $dir = dirname(history_data_file());
+    if (!is_dir($dir)) @mkdir($dir, 0755, true);
+    @file_put_contents($dir . '/heartbeat_' . $which . '.txt', (string)time());
+}
+function heartbeat_read() {
+    $out = array();
+    $dir = dirname(history_data_file());
+    foreach (array('scheduler', 'monitor', 'alerter') as $w) {
+        $f = $dir . '/heartbeat_' . $w . '.txt';
+        if (is_file($f)) $out[$w] = (int)@file_get_contents($f);
+    }
+    return $out;
+}
+
+/* ===== v1.18：一键体检（逐项检查，返回 JSON 列表） ===== */
+function panel_doctor() {
+    $t0 = microtime(true);
+    $items = array();
+    // 1. Docker 权限
+    $r = run_cmd('docker ps -a --format "{{.Names}}"');
+    if ($r['code'] === 0) {
+        $items[] = array('name' => 'Docker 权限', 'level' => 'ok', 'msg' => 'docker 命令可用（www 用户）');
+    } else {
+        $items[] = array('name' => 'Docker 权限', 'level' => 'err', 'msg' => 'docker ps 失败(exit ' . $r['code'] . ')：请把 www 用户加入 docker 组（usermod -aG docker www 后重登生效）');
+    }
+    // 2. 容器状态
+    $run = container_is_running();
+    $items[] = array('name' => '容器状态', 'level' => $run ? 'ok' : 'warn', 'msg' => $run ? '容器运行中' : '容器已停止：跑任务前需先启动容器');
+    // 3. config.yaml 可写
+    $cfgPath = instance_config();
+    if (!is_file($cfgPath)) {
+        $items[] = array('name' => 'config.yaml', 'level' => 'err', 'msg' => '配置文件不存在：' . $cfgPath);
+    } elseif (!is_writable($cfgPath)) {
+        $items[] = array('name' => 'config.yaml', 'level' => 'err', 'msg' => '配置文件不可写，页面保存设置会失败（可试 chmod 666）');
+    } else {
+        $items[] = array('name' => 'config.yaml', 'level' => 'ok', 'msg' => '存在且可写');
+    }
+    // 4. 数据目录可写
+    $dataDir = dirname(history_data_file());
+    if (!is_dir($dataDir) || !is_writable($dataDir)) {
+        $items[] = array('name' => '数据目录', 'level' => 'err', 'msg' => '不可写：' . $dataDir . '（历史/计划任务/告警状态都存这里）');
+    } else {
+        $items[] = array('name' => '数据目录', 'level' => 'ok', 'msg' => '可写（历史、计划任务、告警状态正常落盘）');
+    }
+    // 5. 小助手推送配置
+    $nh = notify_health_check(yaml_read_simple());
+    if (empty($nh['master'])) {
+        $items[] = array('name' => '推送配置', 'level' => 'warn', 'msg' => '通知总开关未开，小助手不会发任何推送');
+    } elseif (!empty($nh['warn'])) {
+        $items[] = array('name' => '推送配置', 'level' => 'warn', 'msg' => '已开 ' . count($nh['ok']) . ' 路；缺：' . implode('、', array_map('strval', (array)$nh['warn'])));
+    } elseif (!empty($nh['ok'])) {
+        $items[] = array('name' => '推送配置', 'level' => 'ok', 'msg' => count($nh['ok']) . ' 路推送就绪');
+    } else {
+        $items[] = array('name' => '推送配置', 'level' => 'warn', 'msg' => '总开关已开但没有配置任何推送渠道');
+    }
+    // 6. 计划任务 cron 心跳
+    $sched = schedule_load();
+    $schedOn = 0;
+    if (!empty($sched['tasks']) && is_array($sched['tasks'])) {
+        foreach ($sched['tasks'] as $t) { if (!empty($t['enabled'])) $schedOn++; }
+    }
+    $fresh = 0;
+    foreach (heartbeat_read() as $ts) { if ((int)$ts > $fresh) $fresh = (int)$ts; }
+    $freshOk = $fresh > 0 && (time() - $fresh) < 300;
+    if ($schedOn > 0 && !$freshOk) {
+        $items[] = array('name' => '计划任务 cron', 'level' => 'err', 'msg' => '已启用 ' . $schedOn . ' 个计划任务，但 5 分钟内没收到巡检心跳——宝塔计划任务可能没建或停了，定时任务不会触发');
+    } elseif ($freshOk) {
+        $items[] = array('name' => '计划任务 cron', 'level' => 'ok', 'msg' => '巡检心跳正常（' . ($schedOn > 0 ? '守护 ' . $schedOn . ' 个计划任务' : '面板暂无启用的计划任务') . '）');
+    } else {
+        $items[] = array('name' => '计划任务 cron', 'level' => 'warn', 'msg' => '未检测到巡检心跳：如需离线告警/定时任务，把「异常告警」卡里的巡检命令加进宝塔计划任务（每 1 分钟）');
+    }
+    // 7. 小助手镜像（6 小时缓存）
+    $ic = image_check(false);
+    if (!empty($ic['ok'])) {
+        if (!empty($ic['has_update'])) {
+            $latest = isset($ic['latest']) && $ic['latest'] ? '（' . $ic['latest'] . '）' : '';
+            $items[] = array('name' => '小助手镜像', 'level' => 'warn', 'msg' => '有新镜像可用' . $latest . '，可在「镜像更新」卡一键更新');
+        } else {
+            $cur = isset($ic['current']) && $ic['current'] ? '（' . $ic['current'] . '）' : '';
+            $items[] = array('name' => '小助手镜像', 'level' => 'ok', 'msg' => '已是最新' . $cur);
+        }
+    } else {
+        $err = isset($ic['err']) && $ic['err'] ? '：' . $ic['err'] : '';
+        $items[] = array('name' => '小助手镜像', 'level' => 'info', 'msg' => '暂无法获取镜像信息' . $err . '（可稍后重试）');
+    }
+    // 8. 面板版本（联网检查，最慢的一项放最后）
+    $cu = check_update();
+    if (!empty($cu['ok']) && !empty($cu['enabled'])) {
+        if (!empty($cu['has_update'])) {
+            $latest = isset($cu['latest']) && $cu['latest'] ? 'v' . $cu['latest'] : '新版本';
+            $items[] = array('name' => '面板版本', 'level' => 'warn', 'msg' => '发现 ' . $latest . '（当前 v' . PANEL_VERSION . '），可在「管理面板更新」卡升级');
+        } else {
+            $items[] = array('name' => '面板版本', 'level' => 'ok', 'msg' => '已是最新 v' . PANEL_VERSION);
+        }
+    } else {
+        $msg = isset($cu['msg']) && $cu['msg'] ? $cu['msg'] : '网络或更新源问题';
+        $items[] = array('name' => '面板版本', 'level' => 'info', 'msg' => '自动检查不可用（' . $msg . '），当前 v' . PANEL_VERSION);
+    }
+    // 9. 磁盘空间（系统盘 + /data 数据盘）
+    $df = run_cmd("df -p / /data 2>/dev/null | tail -n +2");
+    $maxUse = 0; $worst = '';
+    foreach (preg_split('/\r\n|\r|\n/', trim($df['out'])) as $line) {
+        $cols = preg_split('/\s+/', trim($line));
+        if (count($cols) < 6) continue;
+        $pct = (int)str_replace('%', '', $cols[count($cols) - 2]);
+        if ($pct >= $maxUse) { $maxUse = $pct; $worst = $cols[0]; }
+    }
+    if ($maxUse >= 95) {
+        $items[] = array('name' => '磁盘空间', 'level' => 'err', 'msg' => $worst . ' 已用 ' . $maxUse . '%，快满了，尽快清理');
+    } elseif ($maxUse >= 85) {
+        $items[] = array('name' => '磁盘空间', 'level' => 'warn', 'msg' => $worst . ' 已用 ' . $maxUse . '%，留意大文件增长');
+    } elseif ($maxUse > 0) {
+        $items[] = array('name' => '磁盘空间', 'level' => 'ok', 'msg' => '最高使用率 ' . $maxUse . '%（' . $worst . '）');
+    } else {
+        $items[] = array('name' => '磁盘空间', 'level' => 'info', 'msg' => '无法读取磁盘信息');
+    }
+    // 10. 面板目录可写（在线更新/回滚需要）
+    if (is_writable(__DIR__)) {
+        $items[] = array('name' => '面板目录', 'level' => 'ok', 'msg' => '可写（在线更新与回滚可用）');
+    } else {
+        $items[] = array('name' => '面板目录', 'level' => 'warn', 'msg' => '不可写，在线更新与回滚会失败');
+    }
+    return array('ok' => true, 'items' => $items, 'took' => round(microtime(true) - $t0, 1));
+}
+
 /* ===== 计划任务（v1.15+）=====
+
  * 设计要点：
  * - 数据存面板自己的 data/schedule.json，不写小助手的 config.yaml（那里是程序常驻时才生效的
  *   scheduled_tasks，Docker 按需起容器的场景落不到实处）；
@@ -1771,7 +2056,18 @@ if (isset($_GET['ajax']) && is_auth()) {
     }
     if ($ajax === 'running') {
         header('Content-Type: application/json; charset=utf-8');
-        echo json_encode(array('running' => container_is_running()));
+        $run = container_is_running();
+        $hd = history_sync();
+        $cur = null;
+        foreach (array_reverse($hd['items']) as $it) {
+            if (isset($it['status']) && $it['status'] === 'running') { $cur = $it; break; }
+        }
+        echo json_encode(array(
+            'running' => $run,
+            'task'    => $cur ? (string)($cur['task_label'] ?? '') : '',
+            'start'   => $cur ? (int)($cur['start_ts'] ?? 0) : 0,
+            'now'     => time(),
+        ), JSON_UNESCAPED_UNICODE);
         exit;
     }
     if ($ajax === 'config_raw') {
@@ -1822,7 +2118,20 @@ if (isset($_GET['ajax']) && is_auth()) {
             'items'       => history_view($d['items']),
             'today_count' => $stats['count'],
             'today_ok'    => $stats['ok'],
+            'week'        => history_week_stats($d['items']),
         ), JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    // v1.18：一键体检
+    if ($ajax === 'doctor') {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(panel_doctor(), JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    // v1.18：告警巡检（页面打开时兜底触发，服务端 45 秒节流）
+    if ($ajax === 'alert_check') {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(alert_tick(false), JSON_UNESCAPED_UNICODE);
         exit;
     }
     exit;
@@ -1842,7 +2151,9 @@ if (isset($_GET['monitor_sampler']) && $_GET['monitor_sampler'] === '1') {
         exit;
     }
     $r = monitor_sample(60);
-    echo json_encode(array('ok' => true, 'sampled' => $r['sampled'], 'running' => $r['running'], 'points' => count($r['data']['points'])), JSON_UNESCAPED_UNICODE);
+    heartbeat_touch('monitor');
+    $al = alert_tick(true);
+    echo json_encode(array('ok' => true, 'sampled' => $r['sampled'], 'running' => $r['running'], 'points' => count($r['data']['points']), 'alert' => !empty($al['pushed'])), JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -1859,7 +2170,29 @@ if (isset($_GET['scheduler']) && $_GET['scheduler'] === '1') {
         echo json_encode(array('ok' => false, 'msg' => 'forbidden'), JSON_UNESCAPED_UNICODE);
         exit;
     }
-    echo json_encode(schedule_run_due(), JSON_UNESCAPED_UNICODE);
+    heartbeat_touch('scheduler');
+    $schedRes = schedule_run_due();
+    $al = alert_tick(true);
+    $schedRes['alert'] = !empty($al['pushed']);
+    echo json_encode($schedRes, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+/* ===== 异常告警巡检接口（v1.18+，宝塔 crontab 每分钟调用一次，必须带 key）=====
+ * 与 scheduler 同模式：无 key / key 不匹配一律 403。
+ */
+if (isset($_GET['alerter']) && $_GET['alerter'] === '1') {
+    header('Content-Type: application/json; charset=utf-8');
+    $alCfg = panel_config_load();
+    $alKey = isset($alCfg['alerter_key']) ? (string)$alCfg['alerter_key'] : '';
+    $reqKey = isset($_GET['key']) ? (string)$_GET['key'] : '';
+    if ($alKey === '' || $reqKey === '' || !hash_equals($alKey, $reqKey)) {
+        http_response_code(403);
+        echo json_encode(array('ok' => false, 'msg' => 'forbidden'), JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    heartbeat_touch('alerter');
+    echo json_encode(alert_tick(true), JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -1924,6 +2257,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     // 以下需认证 + CSRF
     elseif (is_auth() && csrf_check()) {
+        // v1.18：用户主动容器操作 → 告警静默 10 分钟（避免把人为操作当异常推送）
+        if (in_array($action, array('restart', 'update', 'update_image', 'stop_task', 'stop_loop', 'stop', 'do_update'), true)) {
+            alert_quiet(600);
+        }
         if ($action === 'logout') {
             unset($_SESSION[SKEY]); header('Location: index.php'); exit;
         }
@@ -2084,6 +2421,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 echo json_encode(array('ok' => false, 'msg' => $r['msg']), JSON_UNESCAPED_UNICODE);
             }
+            exit;
+        }
+        // v1.18：异常告警配置保存
+        elseif ($action === 'alert_save') {
+            $chMap = array('bark', 'serverchan', 'webhook');
+            $en = !empty($_POST['alert_enable']) ? '1' : '0';
+            $ch = in_array($_POST['alert_channel'] ?? '', $chMap, true) ? $_POST['alert_channel'] : 'bark';
+            $tg = trim((string)($_POST['alert_target'] ?? ''));
+            if (panel_config_save(array('alert_enable' => $en, 'alert_channel' => $ch, 'alert_target' => $tg))) {
+                echo json_encode(array('ok' => true, 'msg' => '告警设置已保存'), JSON_UNESCAPED_UNICODE);
+            } else {
+                echo json_encode(array('ok' => false, 'msg' => '写入失败，请检查 .panel_config.php 权限'), JSON_UNESCAPED_UNICODE);
+            }
+            exit;
+        }
+        // v1.18：测试告警推送（用表单当前值即时发送，无需先保存）
+        elseif ($action === 'alert_test') {
+            $chMap = array('bark', 'serverchan', 'webhook');
+            $ov = array(
+                'enable'  => true,
+                'channel' => in_array($_POST['alert_channel'] ?? '', $chMap, true) ? $_POST['alert_channel'] : 'bark',
+                'target'  => trim((string)($_POST['alert_target'] ?? '')),
+            );
+            $r = alert_send('M7A 面板测试告警', '看到这条消息说明告警通道配置正确 ✅（来自面板测试）', $ov);
+            echo json_encode(array('ok' => !empty($r['ok']), 'msg' => $r['msg']), JSON_UNESCAPED_UNICODE);
             exit;
         }
         elseif ($action === 'set_update_mode') {
@@ -2807,6 +3169,7 @@ header('Content-Type: text/html; charset=utf-8');
 $isAuth = is_auth();
 $needSetup = !is_file(PASS_FILE);
 $cfgVals = $isAuth ? yaml_read_simple() : array();
+if ($isAuth && $_SERVER['REQUEST_METHOD'] === 'GET') { alert_tick(false); }   // v1.18：页面打开时兜底巡检
 ?>
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -3055,6 +3418,7 @@ html[data-theme="dark"] .sidebar { background:rgba(30,18,40,.66); }
   width:min(420px, calc(100% - 24px)); margin-bottom:calc(16px + env(safe-area-inset-bottom));
   background:var(--glass-bg); -webkit-backdrop-filter:blur(24px) saturate(1.4); backdrop-filter:blur(24px) saturate(1.4);
   border:1px solid var(--glass-border); border-radius:22px; padding:12px 14px 8px;
+  max-height:78vh; overflow-y:auto; -webkit-overflow-scrolling:touch;
   box-shadow:0 18px 50px rgba(0,0,0,.35); animation:sheetUp var(--dur-2, .2s) var(--ease, ease);
 }
 @keyframes sheetUp { from { transform:translateY(26px); opacity:0; } to { transform:none; opacity:1; } }
@@ -3079,6 +3443,57 @@ html[data-theme="dark"] .sidebar { background:rgba(30,18,40,.66); }
 }
 .backtop.show { display:block; }
 .backtop:active { transform:scale(.9); }
+
+/* ===== v1.18：运行中任务悬浮条 ===== */
+.runbar {
+  position:fixed; right:14px; bottom:76px; z-index:295; width:340px;
+  display:none; align-items:center; gap:8px;
+  padding:9px 12px; border-radius:16px;
+  background:var(--glass-bg); border:1px solid var(--glass-border);
+  -webkit-backdrop-filter:blur(20px) saturate(1.4); backdrop-filter:blur(20px) saturate(1.4);
+  box-shadow:0 10px 30px rgba(236,72,153,.20);
+  font-size:12px; color:var(--text);
+}
+.rb-dot { width:8px; height:8px; border-radius:50%; background:#22c55e; animation:rbPulse 1.6s infinite; flex:none; }
+@keyframes rbPulse { 0% { box-shadow:0 0 0 0 rgba(34,197,94,.55); } 70% { box-shadow:0 0 0 7px rgba(34,197,94,0); } 100% { box-shadow:0 0 0 0 rgba(34,197,94,0); } }
+.rb-label { font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
+.rb-time { font-variant-numeric:tabular-nums; color:var(--muted); flex:none; font-weight:600; }
+.rb-acts { display:flex; gap:6px; flex:none; }
+.rb-btn { border:none; background:var(--grad-soft); color:var(--primary); border-radius:10px; padding:5px 9px; font-size:11px; font-weight:700; cursor:pointer; font-family:inherit; }
+.rb-btn:active { transform:scale(.95); }
+.rb-stop { background:rgba(239,68,68,.14); color:#ef4444; }
+/* ===== v1.18：历史近7天统计 ===== */
+.hist-week { display:flex; gap:8px; align-items:flex-end; padding:12px 4px 6px; }
+.wk-col { flex:1; display:flex; flex-direction:column; align-items:center; gap:4px; }
+.wk-bars { display:flex; align-items:flex-end; gap:3px; height:56px; width:100%; justify-content:center; }
+.wk-bar { width:12px; border-radius:6px 6px 3px 3px; min-height:3px; }
+.wk-ok { background:linear-gradient(180deg,#34d399,#059669); }
+.wk-fail { background:linear-gradient(180deg,#f87171,#dc2626); }
+.wk-zero { background:var(--border); }
+.wk-num { font-size:10px; color:var(--muted); }
+.wk-day { font-size:10px; color:var(--muted); }
+.wk-day.today, .wk-col.today .wk-num { color:var(--primary); font-weight:700; }
+/* ===== v1.18：一键体检结果 ===== */
+.doctor-box { display:none; flex-direction:column; gap:6px; margin-top:10px; }
+.doctor-item { display:flex; gap:8px; align-items:flex-start; font-size:13px; padding:8px 10px; border-radius:10px; background:var(--glass-bg); border:1px solid var(--glass-border); }
+.doctor-item b { flex:none; font-weight:400; }
+.doctor-item span { color:var(--text); line-height:1.5; }
+.doctor-meta { font-size:11px; color:var(--muted); text-align:right; }
+/* ===== v1.18：全局搜索 ===== */
+.search-overlay { position:fixed; inset:0; z-index:500; background:rgba(20,8,30,.5); -webkit-backdrop-filter:blur(4px); backdrop-filter:blur(4px); display:none; align-items:flex-start; justify-content:center; padding:9vh 14px 14px; }
+.search-overlay.show { display:flex; }
+.search-panel { width:min(560px,100%); max-height:76vh; display:flex; flex-direction:column; background:var(--glass-bg); border:1px solid var(--glass-border); border-radius:20px; -webkit-backdrop-filter:blur(24px) saturate(1.4); backdrop-filter:blur(24px) saturate(1.4); box-shadow:0 22px 60px rgba(0,0,0,.4); overflow:hidden; }
+.search-bar { display:flex; align-items:center; gap:8px; padding:12px 14px; border-bottom:1px solid var(--border); }
+.search-bar input { flex:1; border:none; background:transparent; color:var(--text); font-size:15px; font-family:inherit; outline:none; min-width:0; }
+.search-results { overflow-y:auto; padding:6px; }
+.search-item { display:flex; align-items:center; gap:9px; width:100%; text-align:left; border:none; background:transparent; color:var(--text); font-family:inherit; font-size:14px; padding:10px 11px; border-radius:12px; cursor:pointer; }
+.search-item:hover, .search-item.sel { background:var(--grad-soft); }
+.search-item .si-ico { flex:none; }
+.search-item .si-main { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600; }
+.search-item .si-sub { font-size:11px; color:var(--muted); flex:none; }
+.search-hint { padding:14px 10px; text-align:center; font-size:12px; color:var(--muted); }
+.search-hit { animation:hitFlash 2s ease; }
+@keyframes hitFlash { 0%,55% { box-shadow:0 0 0 2px rgba(236,72,153,.9); background:rgba(236,72,153,.16); } 100% { box-shadow:none; background:transparent; } }
 
 /* ===== 状态徽章 ===== */
 .status-badge {
@@ -3725,6 +4140,8 @@ html[data-theme="light"] .card { background:var(--glass-bg); }
   .tab-fab:active { transform:scale(.92); }
   .tab-fab.busy { opacity:.75; }
   .backtop { bottom:calc(96px + env(safe-area-inset-bottom)); }
+  .runbar { left:12px; right:12px; width:auto; bottom:calc(88px + env(safe-area-inset-bottom)); }
+  body.has-runbar .backtop { bottom:calc(150px + env(safe-area-inset-bottom)); }
 
   /* 性能降级：光斑静态化 + 去掉多层 backdrop-filter（保半透明纯色底） */
   .blob { animation:none; opacity:.6; }
@@ -3738,7 +4155,7 @@ html[data-theme="light"] .card { background:var(--glass-bg); }
     background:var(--glass-bg);
   }
   /* v1.17：悬浮胶囊/快捷菜单/回顶部 降级为实底 */
-  .mobile-tabbar, .sheet, .backtop { -webkit-backdrop-filter:none; backdrop-filter:none; background:var(--card); }
+  .mobile-tabbar, .sheet, .backtop, .runbar, .search-panel { -webkit-backdrop-filter:none; backdrop-filter:none; background:var(--card); }
 }
 </style>
 </head>
@@ -3815,6 +4232,7 @@ html[data-theme="light"] .card { background:var(--glass-bg); }
     <div class="sidebar-bottom">
       <span class="status-badge" id="statusBadge" style="justify-content:center;"><span class="dot"></span><span class="status-text">检测中…</span></span>
       <div class="sidebar-bottom-row">
+        <button class="icon-btn" onclick="openSearch()" title="全局搜索（Ctrl+K）">🔍</button>
         <button class="icon-btn" id="themeBtn" onclick="toggleTheme()" title="切换主题">🌙</button>
         <form method="post" style="display:inline;flex:1;"><?php echo csrf_field(); ?><input type="hidden" name="action" value="logout"><button type="submit" class="logout-btn">退出</button></form>
       </div>
@@ -3828,6 +4246,7 @@ html[data-theme="light"] .card { background:var(--glass-bg); }
     <!-- 移动端顶栏 -->
     <div class="mobile-topbar">
       <button class="icon-btn" onclick="openSidebar()">☰</button>
+      <button class="icon-btn" onclick="openSearch()" title="全局搜索">🔍</button>
       <button class="icon-btn" id="themeBtnM" onclick="toggleTheme()" title="切换主题">🎀</button>
       <span class="grad-text" style="font-weight:800;font-size:16px;">M7A WebUI</span>
       <span class="status-badge" id="statusBadgeM" style="margin-left:auto;"><span class="dot"></span><span class="status-text">检测中…</span></span>
@@ -3906,6 +4325,50 @@ html[data-theme="light"] .card { background:var(--glass-bg); }
         <div class="mon-chart" id="monChart"><div style="text-align:center;color:var(--muted);padding-top:110px;font-size:13px;">图表加载中…（首次采样约需 1 秒）</div></div>
         <div class="mon-host" id="monHost"></div>
         <p class="tip mon-tip" style="margin:10px 0 0;">实时采样：打开面板时每 <span id="monIvText"><?php echo $_monIv; ?></span> 秒自动采样；想不打开面板也有曲线，在宝塔「计划任务」添加 Shell 脚本每 1 分钟执行：<code id="monCronCmd"><?php echo h($_monCron); ?></code><br><span style="color:var(--muted);font-size:12px;">提示：命令中的 IP 地址会自动取你当前访问面板的地址；如果服务器实际 IP 与此不同（例如用域名访问、内网/外网 IP 不一致），请把命令里的 IP 改成你服务器的实际 IP。</span></p>
+      </div>
+
+      <!-- v1.18：异常告警 -->
+      <div class="card">
+        <h2><span class="icon">🚨</span> 异常告警
+          <span class="badge" id="alertBadge" style="background:var(--primary-soft);color:var(--primary);"><?php echo (!empty($cfgVals['alert_enable']) && $cfgVals['alert_enable'] === '1') ? '已启用' : '未启用'; ?></span>
+        </h2>
+        <div class="cfg-row">
+          <div class="cfg-label">启用告警<span class="cfg-tip">容器意外停止 / 任务中断时自动推送手机</span></div>
+          <label style="display:flex;align-items:center;gap:6px;font-size:14px;cursor:pointer;"><input type="checkbox" id="alertEnable" style="width:18px;height:18px;"<?php echo (!empty($cfgVals['alert_enable']) && $cfgVals['alert_enable'] === '1') ? ' checked' : ''; ?>> 开启</label>
+        </div>
+        <div class="cfg-row">
+          <div class="cfg-label">推送通道</div>
+          <select id="alertChannel" class="cfg-select" style="max-width:280px;">
+            <option value="bark"<?php echo (($cfgVals['alert_channel'] ?? 'bark') === 'bark') ? ' selected' : ''; ?>>Bark（iOS / macOS 推送）</option>
+            <option value="serverchan"<?php echo (($cfgVals['alert_channel'] ?? '') === 'serverchan') ? ' selected' : ''; ?>>Server酱（微信推送）</option>
+            <option value="webhook"<?php echo (($cfgVals['alert_channel'] ?? '') === 'webhook') ? ' selected' : ''; ?>>Webhook（自定义 JSON 地址）</option>
+          </select>
+        </div>
+        <div class="cfg-row">
+          <div class="cfg-label">接收地址<span class="cfg-tip">Bark 填推送 Key；Server酱填 SendKey；Webhook 填完整 URL</span></div>
+          <input type="text" id="alertTarget" class="cfg-input-text" style="max-width:380px;" placeholder="如：xxxx-yyyy 或 https://..." value="<?php echo h($cfgVals['alert_target'] ?? ''); ?>">
+        </div>
+        <div class="btn-group">
+          <button type="button" class="btn green" onclick="saveAlert()">💾 保存设置</button>
+          <button type="button" class="btn gray" onclick="testAlert()">📤 发送测试</button>
+        </div>
+        <?php
+        $_alCfg = panel_config_load();
+        $_alKey = isset($_alCfg['alerter_key']) && $_alCfg['alerter_key'] !== '' ? $_alCfg['alerter_key'] : '';
+        if ($_alKey === '') { $_alKey = bin2hex(random_bytes(8)); panel_config_save(array('alerter_key' => $_alKey)); }
+        $_alScheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+        $_alBase = $_alScheme . '://' . ($_SERVER['HTTP_HOST'] ?? 'localhost') . rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? '/'), '/\\');
+        $_alCron = 'curl -s "' . $_alBase . '/index.php?alerter=1&key=' . $_alKey . '" >/dev/null 2>&1';
+        ?>
+        <p class="tip">巡检命令（宝塔「计划任务」Shell 脚本每 1 分钟执行，离线也能告警）：<code id="alerterCronCmd"><?php echo h($_alCron); ?></code><br><span style="color:var(--muted);font-size:12px;">没挂 cron 时，面板打开期间也会巡检（约 45 秒一次）；配置保存后立即生效。</span></p>
+      </div>
+
+      <!-- v1.18：一键体检 -->
+      <div class="card">
+        <h2><span class="icon">🩺</span> 一键体检
+          <button type="button" class="btn small primary" id="doctorBtn" onclick="runDoctor()" style="margin-left:auto;">开始体检</button>
+        </h2>
+        <div class="doctor-box" id="doctorBox"><div class="doctor-item"><span class="d-ico">ℹ️</span><div class="d-msg">点击「开始体检」检查 Docker 权限、配置可写、推送配置、计划任务心跳、磁盘空间、镜像与面板版本等。</div></div></div>
       </div>
 
       <div class="card">
@@ -4035,6 +4498,7 @@ html[data-theme="light"] .card { background:var(--glass-bg); }
           <span class="badge" id="histStat" style="background:var(--primary-soft);color:var(--primary);">今日执行 <?php echo (int)$histToday['count']; ?> 次 · 成功 <?php echo (int)$histToday['ok']; ?> 次</span>
           <button class="btn small gray" style="margin-left:auto;" onclick="clearHistory()">🗑️ 清空历史</button>
         </h2>
+        <div class="hist-week" id="histWeek"></div>
         <div class="hist-table-wrap">
           <table class="hist-table">
             <thead><tr><th>任务</th><th>开始时间</th><th>耗时</th><th>状态</th><th style="text-align:right;">操作</th></tr></thead>
@@ -4406,6 +4870,16 @@ html[data-theme="light"] .card { background:var(--glass-bg); }
   <button type="button" class="tab-item" data-tab="config" onclick="switchTab('config')"><span class="tab-icon">⚙️</span><span class="tab-text">配置</span></button>
 </nav>
 <button type="button" class="backtop" id="backTop" onclick="backToTop()" aria-label="回到顶部">⬆️</button>
+<!-- v1.18：运行中任务悬浮条 -->
+<div class="runbar" id="runBar">
+  <span class="rb-dot"></span>
+  <span class="rb-label" id="rbLabel">运行中</span>
+  <span class="rb-time" id="rbTime">00:00</span>
+  <span class="rb-acts">
+    <button type="button" class="rb-btn" onclick="switchTab('log')">📝 日志</button>
+    <button type="button" class="rb-btn rb-stop" onclick="runbarStop()">⏹ 停止</button>
+  </span>
+</div>
 <div class="sheet-overlay" id="fabSheetOverlay" onclick="closeFabSheet()">
   <div class="sheet" role="menu" onclick="event.stopPropagation()">
     <div class="sheet-title">容器快捷操作</div>
@@ -4415,22 +4889,46 @@ html[data-theme="light"] .card { background:var(--glass-bg); }
     <button type="button" class="sheet-cancel" onclick="closeFabSheet()">取消</button>
   </div>
 </div>
+<!-- v1.18：点按中央键 → 快速跑任务菜单 -->
+<div class="sheet-overlay" id="taskSheetOverlay" onclick="closeTaskSheet()">
+  <div class="sheet" role="menu" onclick="event.stopPropagation()">
+    <div class="sheet-title">🚀 快速跑任务</div>
+    <?php foreach ($TASKS as $key => $t): ?>
+    <button type="button" class="sheet-item" onclick="quickTask('<?php echo h($key); ?>', '<?php echo h($t['label']); ?>')"><?php echo h($t['icon'] . ' ' . $t['label']); ?><span class="sheet-sub"><?php echo h($t['desc']); ?></span></button>
+    <?php endforeach; ?>
+    <button type="button" class="sheet-cancel" onclick="closeTaskSheet()">取消</button>
+  </div>
+</div>
+<!-- v1.18：全局搜索 -->
+<div class="search-overlay" id="searchOverlay" onclick="closeSearch()">
+  <div class="search-panel" onclick="event.stopPropagation()">
+    <div class="search-bar"><span style="opacity:.7;">🔍</span><input type="text" id="searchInput" placeholder="搜任务 / 配置项 / 页面 / 操作，回车跳转，Esc 关闭" autocomplete="off"></div>
+    <div class="search-results" id="searchResults"></div>
+  </div>
+</div>
 <?php endif; ?>
 
 <script>
 /* ===== 主题（默认星铁粉蓝 三月七）===== */
+var TASK_LIST = <?php echo json_encode($TASKS, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG); ?>;
 var THEMES = [
   { name: 'march7', icon: '🎀', label: '星铁粉蓝' },
   { name: 'light',  icon: '☀️', label: '亮色' },
-  { name: 'dark',   icon: '🌙', label: '深色' }
+  { name: 'dark',   icon: '🌙', label: '深色' },
+  { name: 'auto',   icon: '🖥️', label: '跟随系统' }
 ];
+var _themeMq = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
 function themeIdx(name) {
   for (var i = 0; i < THEMES.length; i++) if (THEMES[i].name === name) return i;
   return 0;
 }
+function themeResolved(name) {
+  if (name !== 'auto') return name;
+  return (_themeMq && _themeMq.matches) ? 'dark' : 'march7';
+}
 function applyTheme(name) {
   var idx = themeIdx(name), d = document.documentElement, btn = document.getElementById('themeBtn');
-  d.setAttribute('data-theme', THEMES[idx].name);
+  d.setAttribute('data-theme', themeResolved(THEMES[idx].name));
   if (btn) {
     btn.textContent = THEMES[idx].icon;
     btn.title = '切换主题：' + THEMES[idx].label + ' → ' + THEMES[(idx + 1) % THEMES.length].label;
@@ -4440,14 +4938,28 @@ function applyTheme(name) {
   try { localStorage.setItem('m7a_theme', THEMES[idx].name); } catch(e) {}
 }
 function toggleTheme() {
-  var cur = document.documentElement.getAttribute('data-theme') || 'march7';
+  var cur = null;
+  try { cur = localStorage.getItem('m7a_theme'); } catch(e) {}
+  if (!cur || themeIdx(cur) < 0 || (cur !== 'auto' && themeIdx(cur) === 0 && cur !== 'march7')) {
+    cur = document.documentElement.getAttribute('data-theme') || 'march7';
+  }
+  if (['march7','light','dark','auto'].indexOf(cur) < 0) cur = 'march7';
   applyTheme(THEMES[(themeIdx(cur) + 1) % THEMES.length].name);
 }
 (function() {
   var t = null;
   try { t = localStorage.getItem('m7a_theme'); } catch(e) {}
-  if (t !== 'light' && t !== 'dark' && t !== 'march7') t = 'march7';
+  if (['march7','light','dark','auto'].indexOf(t) < 0) t = 'march7';
   applyTheme(t);
+  if (_themeMq) {
+    var onMq = function() {
+      var s = null;
+      try { s = localStorage.getItem('m7a_theme'); } catch(e) {}
+      if (s === 'auto') applyTheme('auto');
+    };
+    if (_themeMq.addEventListener) _themeMq.addEventListener('change', onMq);
+    else if (_themeMq.addListener) _themeMq.addListener(onMq);
+  }
 })();
 
 /* ===== 侧边栏（移动端抽屉） ===== */
@@ -4770,6 +5282,7 @@ function loadHistory() {
     var st = document.getElementById('histStat');
     if (st) st.textContent = '今日执行 ' + d.today_count + ' 次 · 成功 ' + d.today_ok + ' 次';
     renderHistoryRows(d.items);
+    if (typeof renderWeek === 'function') renderWeek(d.week);
   }).catch(function(){});
 }
 function clearHistory() {
@@ -5079,18 +5592,28 @@ var _fabRunning = null, _fabTimer = null, _fabSuppressClick = false;
 function fabSetState(running) {
   _fabRunning = running;
   var icon = document.getElementById('fabIcon');
-  if (icon) icon.textContent = running === null ? '⏳' : (running ? '⏸️' : '▶️');
+  if (icon) icon.textContent = running === null ? '⏳' : (running ? '🏃' : '🎯');
   var fab = document.getElementById('tabFab');
-  if (fab) fab.title = running ? '点按=停止容器，长按=更多操作' : '点按=启动容器（重启），长按=更多操作';
+  if (fab) fab.title = '点按=快速跑任务，长按=容器操作';
 }
 function fabTap() {
   if (_fabSuppressClick) { _fabSuppressClick = false; return; }
   if (_fabRunning === null) { miniToast('容器状态检测中，稍候再试'); return; }
-  if (_fabRunning) {
-    if (confirm('确定停止容器？任务将全部中断，之后点中央按钮即可恢复。')) submitPanelAction('stop');
-  } else {
-    if (confirm('启动容器（docker compose restart）？')) submitPanelAction('restart');
+  openTaskSheet();
+}
+function openTaskSheet() { var o = document.getElementById('taskSheetOverlay'); if (o) o.classList.add('show'); }
+function closeTaskSheet() { var o = document.getElementById('taskSheetOverlay'); if (o) o.classList.remove('show'); }
+function quickTask(key, label) {
+  closeTaskSheet();
+  if (_fabRunning === false) {
+    if (!confirm('容器当前未运行，先启动容器再执行「' + label + '」？')) return;
+    submitPanelAction('restart'); return;
   }
+  if (typeof _rbTask !== 'undefined' && _rbTask && _rbTask !== label) {
+    if (!confirm('已有任务「' + _rbTask + '」运行中，强制切换为「' + label + '」？（原任务会被中断）')) return;
+  }
+  if (!confirm('执行「' + label + '」？')) return;
+  submitPanelAction(key);
 }
 function fabLongPressStart() {
   if (_fabTimer) clearTimeout(_fabTimer);
@@ -5153,6 +5676,7 @@ function refreshStatus() {
       if (txt) txt.textContent = d.running ? '运行中' : '已停止';
     });
     fabSetState(!!d.running);
+    runbarUpdate(d && d.task && d.running ? d : null);
   }).catch(function() {});
 }
 
@@ -5175,6 +5699,278 @@ function stopAutoRefresh() {
   if (_statusTimer) { clearInterval(_statusTimer); _statusTimer = null; }
 }
 
+/* ===== v1.18：运行中任务悬浮条 ===== */
+var _rbTask = null, _rbStart = 0, _rbNow = 0, _rbLocal = 0, _rbTick = null;
+function runbarUpdate(d) {
+  var bar = document.getElementById('runBar');
+  if (!bar) return;
+  if (_rbTick) { clearInterval(_rbTick); _rbTick = null; }
+  if (!d || !d.task) {
+    bar.style.display = 'none';
+    document.body.classList.remove('has-runbar');
+    _rbTask = null;
+    return;
+  }
+  _rbTask = d.task;
+  _rbStart = parseInt(d.start, 10) || 0;
+  _rbNow = parseInt(d.now, 10) || 0;
+  _rbLocal = Math.floor(Date.now() / 1000);
+  var lbl = document.getElementById('rbLabel');
+  if (lbl) lbl.textContent = d.task;
+  bar.style.display = 'flex';
+  document.body.classList.add('has-runbar');
+  runbarTick();
+  _rbTick = setInterval(runbarTick, 1000);
+}
+function runbarTick() {
+  var el = document.getElementById('rbTime');
+  if (!el || !_rbStart) return;
+  var nowS = _rbNow + (Math.floor(Date.now() / 1000) - _rbLocal);
+  var s = Math.max(0, nowS - _rbStart);
+  var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  var pad = function(n) { return (n < 10 ? '0' : '') + n; };
+  el.textContent = (h ? h + ':' + pad(m) : pad(m)) + ':' + pad(sec);
+}
+function runbarStop() {
+  if (!confirm('停止当前任务？日志可能不完整。')) return;
+  submitPanelAction('stop_task');
+}
+/* ===== v1.18：历史近7天统计图 ===== */
+function renderWeek(week) {
+  var box = document.getElementById('histWeek');
+  if (!box) return;
+  if (!week || !week.length) { box.style.display = 'none'; return; }
+  var max = 1;
+  week.forEach(function(d) { if (d.count > max) max = d.count; });
+  box.style.display = 'flex';
+  box.innerHTML = week.map(function(d) {
+    var failN = d.count - d.ok, bars = '';
+    if (d.count === 0) {
+      bars = '<div class="wk-bar wk-zero" style="height:4px"></div>';
+    } else {
+      var okH = Math.max(4, Math.round(d.ok / max * 52));
+      var failH = Math.max(4, Math.round(failN / max * 52));
+      if (d.ok > 0) bars += '<div class="wk-bar wk-ok" style="height:' + okH + 'px"></div>';
+      if (failN > 0) bars += '<div class="wk-bar wk-fail" style="height:' + failH + 'px"></div>';
+    }
+    var tip = d.date + '：共 ' + d.count + ' 次，成功 ' + d.ok + ' 次' + (failN > 0 ? '，失败/中断 ' + failN + ' 次' : '');
+    return '<div class="wk-col' + (d.today ? ' today' : '') + '" title="' + tip + '">' +
+      '<span class="wk-num">' + (d.count || '') + '</span>' +
+      '<div class="wk-bars">' + bars + '</div>' +
+      '<span class="wk-day' + (d.today ? ' today' : '') + '">' + d.wd + '</span></div>';
+  }).join('');
+}
+/* ===== v1.18：一键体检 ===== */
+function runDoctor() {
+  var box = document.getElementById('doctorBox'), btn = document.getElementById('doctorBtn');
+  if (!box) return;
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 检测中…'; }
+  box.style.display = 'flex';
+  box.innerHTML = '<div class="doctor-item"><b>⏳</b><span>正在体检，请稍候…</span></div>';
+  var done = function() { if (btn) { btn.disabled = false; btn.textContent = '🩺 开始体检'; } };
+  fetch('?ajax=doctor').then(function(r) { return r.json(); }).then(function(d) {
+    done();
+    if (!d || !d.ok) { box.innerHTML = '<div class="doctor-item"><b>❌</b><span>体检接口异常</span></div>'; return; }
+    var ico = { ok: '✅', warn: '⚠️', err: '❌', info: 'ℹ️' };
+    box.innerHTML = d.items.map(function(it) {
+      return '<div class="doctor-item"><b>' + (ico[it.level] || 'ℹ️') + '</b><span><strong>' + it.name + '</strong>：' + it.msg + '</span></div>';
+    }).join('') + '<div class="doctor-meta">共 ' + d.items.length + ' 项 · 耗时 ' + d.took + 's</div>';
+  }).catch(function() {
+    done();
+    box.innerHTML = '<div class="doctor-item"><b>❌</b><span>网络错误，体检失败</span></div>';
+  });
+}
+/* ===== v1.18：告警卡交互 ===== */
+function saveAlert() {
+  var btn = document.getElementById('alertSaveBtn');
+  if (btn) btn.textContent = '⏳ 保存中…';
+  var fd = new FormData();
+  fd.append('action', 'alert_save');
+  fd.append('alert_enable', document.getElementById('alertEnable').checked ? '1' : '0');
+  fd.append('alert_channel', document.getElementById('alertChannel').value);
+  fd.append('alert_target', document.getElementById('alertTarget').value.trim());
+  var csrf = document.querySelector('input[name="csrf"]');
+  if (csrf) fd.append('csrf', csrf.value);
+  fetch('index.php', { method: 'POST', body: fd }).then(function(r) { return r.json(); }).then(function(d) {
+    if (btn) btn.textContent = '💾 保存设置';
+    var badge = document.getElementById('alertBadge');
+    if (badge && d && d.ok) badge.textContent = d.enable ? '已开启' : '未开启';
+    miniToast(d && d.ok ? '告警配置已保存' : ('保存失败：' + (d && d.msg ? d.msg : '未知错误')));
+  }).catch(function() {
+    if (btn) btn.textContent = '💾 保存设置';
+    miniToast('保存失败：网络错误');
+  });
+}
+function testAlert() {
+  var btn = document.getElementById('alertTestBtn');
+  if (btn) btn.textContent = '⏳ 发送中…';
+  var fd = new FormData();
+  fd.append('action', 'alert_test');
+  fd.append('alert_channel', document.getElementById('alertChannel').value);
+  fd.append('alert_target', document.getElementById('alertTarget').value.trim());
+  var csrf = document.querySelector('input[name="csrf"]');
+  if (csrf) fd.append('csrf', csrf.value);
+  fetch('index.php', { method: 'POST', body: fd }).then(function(r) { return r.json(); }).then(function(d) {
+    if (btn) btn.textContent = '📤 发送测试';
+    miniToast(d && d.ok ? '测试消息已发出，去手机上看一眼' : ('发送失败：' + (d && d.msg ? d.msg : '请检查配置')));
+  }).catch(function() {
+    if (btn) btn.textContent = '📤 发送测试';
+    miniToast('发送失败：网络错误');
+  });
+}
+/* ===== v1.18：全局搜索 ===== */
+var _searchHits = [], _searchIdx = [];
+function openSearch() {
+  buildSearchIndex();
+  var o = document.getElementById('searchOverlay');
+  if (o) o.classList.add('show');
+  var inp = document.getElementById('searchInput');
+  if (inp) {
+    inp.value = '';
+    searchRender('');
+    setTimeout(function() { inp.focus(); }, 60);
+  }
+}
+function closeSearch() {
+  var o = document.getElementById('searchOverlay');
+  if (o) o.classList.remove('show');
+}
+function buildSearchIndex() {
+  var idx = [];
+  idx.push({ type: 'page', ico: '🏠', main: '概览页', sub: '页面', kw: '概览 首页 主页 状态 overview', go: 'overview' });
+  idx.push({ type: 'page', ico: '📋', main: '任务页', sub: '页面', kw: '任务 执行 历史 tasks', go: 'tasks' });
+  idx.push({ type: 'page', ico: '📜', main: '日志页', sub: '页面', kw: '日志 输出 排错 log', go: 'log' });
+  idx.push({ type: 'page', ico: '⚙️', main: '配置页', sub: '页面', kw: '配置 设置 参数 config', go: 'config' });
+  Object.keys(window.TASK_LIST || {}).forEach(function(k) {
+    var t = TASK_LIST[k];
+    if (!t) return;
+    idx.push({ type: 'task', ico: t.icon || '\U0001f3af', main: t.label, sub: '任务', kw: (t.label + ' ' + (t.desc || '') + ' ' + k).toLowerCase(), go: k });
+  });
+  document.querySelectorAll('.cfg-row').forEach(function(row) {
+    var txt = '';
+    var lab = row.querySelector('.cfg-label');
+    if (lab) {
+      for (var i = 0; i < lab.childNodes.length; i++) {
+        var n = lab.childNodes[i];
+        if (n.nodeType === 3 && n.textContent.trim()) { txt = n.textContent; break; }
+      }
+      if (!txt) txt = lab.textContent;
+    }
+    if (!txt) txt = row.textContent || '';
+    txt = txt.replace(/\s+/g, ' ').trim();
+    if (!txt || txt.length > 46) txt = txt.slice(0, 46);
+    if (!txt) return;
+    var grp = row.closest ? row.closest('.cfg-group') : null;
+    var gname = '';
+    if (grp) {
+      var h3 = grp.querySelector('h3');
+      if (h3) gname = (h3.textContent || '').replace(/\s+/g, ' ').trim();
+    }
+    idx.push({ type: 'cfg', ico: '🔧', main: txt, sub: gname || '配置', kw: (txt + ' ' + gname).toLowerCase(), ref: row });
+  });
+  idx.push({ type: 'act', ico: '\U0001f504', main: '重启容器', sub: '操作', kw: '重启 容器 restart', run: function() { fabAct('restart'); } });
+  idx.push({ type: 'act', ico: '⏸️', main: '停止容器', sub: '操作', kw: '停止 容器 stop', run: function() { fabAct('stop'); } });
+  idx.push({ type: 'act', ico: '⬆️', main: '更新镜像', sub: '操作', kw: '更新 镜像 升级 update', run: function() { if (confirm('更新面板镜像并重建容器？')) doUpdate(); } });
+  idx.push({ type: 'act', ico: '\U0001f5d1️', main: '清空任务历史', sub: '操作', kw: '清空 历史 记录 clear', run: function() { clearHistory(); } });
+  idx.push({ type: 'act', ico: '⬆️', main: '回到顶部', sub: '操作', kw: '顶部 回顶 backtop', run: function() { backToTop(); } });
+  idx.push({ type: 'act', ico: '\U0001f3a8', main: '切换主题', sub: '操作', kw: '主题 颜色 深色 浅色 跟随系统 theme', run: function() { toggleTheme(); } });
+  _searchIdx = idx;
+}
+function searchRender(q) {
+  var box = document.getElementById('searchResults');
+  if (!box) return;
+  q = (q || '').trim().toLowerCase();
+  _searchHits = [];
+  if (!q) {
+    box.innerHTML = '<div class="search-hint">输入关键词：任务名 / 页面 / 配置项 / 操作<br>回车跳第一项 · Esc 关闭 · Ctrl+K 随时唤起</div>';
+    return;
+  }
+  _searchHits = _searchIdx.filter(function(it) {
+    return (it.main + ' ' + (it.sub || '') + ' ' + (it.kw || '')).toLowerCase().indexOf(q) >= 0;
+  }).slice(0, 20);
+  if (!_searchHits.length) {
+    box.innerHTML = '<div class="search-hint">没有找到「' + q + '」相关内容</div>';
+    return;
+  }
+  box.innerHTML = _searchHits.map(function(it, i) {
+    return '<button type="button" class="search-item' + (i === 0 ? ' sel' : '') + '" onclick="searchGo(' + i + ')">' +
+      '<span class="si-ico">' + it.ico + '</span><span class="si-main">' + it.main + '</span><span class="si-sub">' + (it.sub || '') + '</span></button>';
+  }).join('');
+}
+function searchGo(i) {
+  var it = _searchHits[i];
+  if (!it) return;
+  closeSearch();
+  if (it.type === 'page') { switchTab(it.go); return; }
+  if (it.type === 'task') { switchTab('tasks'); setTimeout(function() { flashFind(it.main); }, 240); return; }
+  if (it.type === 'cfg') { switchTab('config'); setTimeout(function() { goCfg(it.ref); }, 240); return; }
+  if (it.type === 'act') { setTimeout(function() { it.run(); }, 150); return; }
+}
+function flashEl(el) {
+  if (!el) return;
+  try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch(e) { el.scrollIntoView(); }
+  el.classList.remove('search-hit');
+  void el.offsetWidth;
+  el.classList.add('search-hit');
+  setTimeout(function() { el.classList.remove('search-hit'); }, 2300);
+}
+function flashFind(text) {
+  var scope = document.querySelector('.page.active') || document;
+  var cands = scope.querySelectorAll('button, .task-card, .cfg-row');
+  for (var i = 0; i < cands.length; i++) {
+    var tx = cands[i].textContent || '';
+    if (tx.indexOf(text) >= 0) { flashEl(cands[i]); return; }
+  }
+  miniToast('已跳到任务页');
+}
+function goCfg(ref) {
+  if (!ref || !ref.isConnected) {
+    buildSearchIndex();
+    miniToast('页面已刷新，请重新搜索');
+    return;
+  }
+  var grp = ref.closest ? ref.closest('.cfg-group') : null;
+  if (grp) {
+    if (grp.classList.contains('collapsed')) toggleCfgGroup(grp.id.replace('cfgGroup-', ''));
+    var body = grp.querySelector('.cfg-body');
+    if (body) { body.style.maxHeight = 'none'; body.style.opacity = '1'; }
+  }
+  flashEl(ref);
+}
+/* ===== v1.18：边缘左右滑切页（≤640px） ===== */
+(function() {
+  var sx = 0, sy = 0, st = 0, tracking = false;
+  var TABS = ['overview', 'tasks', 'log', 'config'];
+  document.addEventListener('touchstart', function(e) {
+    if (window.innerWidth > 640 || !e.touches || !e.touches.length) { tracking = false; return; }
+    if (document.querySelector('.sheet-overlay.show, .search-overlay.show, .sidebar.open, .sidebar.open')) { tracking = false; return; }
+    var ae = document.activeElement;
+    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable)) { tracking = false; return; }
+    var t = e.touches[0];
+    if (t.clientX <= 28 || t.clientX >= window.innerWidth - 28) {
+      sx = t.clientX; sy = t.clientY; st = Date.now(); tracking = true;
+    } else {
+      tracking = false;
+    }
+  }, { passive: true });
+  document.addEventListener('touchend', function(e) {
+    if (!tracking) return;
+    tracking = false;
+    if (!e.changedTouches || !e.changedTouches.length) return;
+    var t = e.changedTouches[0];
+    var dx = t.clientX - sx, dy = t.clientY - sy, dt = Date.now() - st;
+    if (Math.abs(dx) < 60 || Math.abs(dy) >= 50 || dt > 700) return;
+    var active = document.querySelector('.page.active');
+    var cur = active && active.dataset ? active.dataset.tab : 'overview';
+    var i = TABS.indexOf(cur);
+    if (i < 0) i = 0;
+    var nextI = (sx <= 28) ? i - 1 : i + 1;
+    if (nextI < 0 || nextI >= TABS.length) return;
+    try { if (navigator.vibrate) navigator.vibrate(8); } catch(e2) {}
+    switchTab(TABS[nextI]);
+  }, { passive: true });
+})();
+
 // Init
 refreshStatus();
 refreshLog();
@@ -5182,6 +5978,24 @@ startAutoRefresh();
 initLogExport();
 loadECharts(function(){ loadMonitor(); });
 startMonitor();
+/* v1.18：搜索输入绑定 + 全局快捷键 + 告警巡检心跳 */
+(function() {
+  var inp = document.getElementById('searchInput');
+  if (inp) {
+    inp.addEventListener('input', function() { searchRender(inp.value); });
+    inp.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') { e.preventDefault(); searchGo(0); }
+    });
+  }
+  document.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+      e.preventDefault();
+      openSearch();
+    }
+    if (e.key === 'Escape') { closeSearch(); closeTaskSheet(); }
+  });
+  setInterval(function() { fetch('?ajax=alert_check').catch(function() {}); }, 60000);
+})();
 
 /* ===== 保存并重启 ===== */
 function restartAfterSave() {
