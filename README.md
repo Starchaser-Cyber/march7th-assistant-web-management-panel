@@ -1,4 +1,4 @@
-# March7th 小助手网页管理面板 v1.18（单文件版）
+# March7th 小助手网页管理面板 v1.19（单文件版）
 
 > 浏览器里管三月七小助手，告别 SSH 命令行。
 
@@ -11,13 +11,21 @@
 本面板是 [三月七小助手（March7thAssistant）](https://github.com/moesnow/March7thAssistant) 的配套网页管理工具。原项目是跑在电脑上的 GUI / 命令行程序，人不在电脑前就没法操作；本面板把它部署到服务器后，你用手机或电脑浏览器就能随时远程管理——启动日常任务、清体力、改配置、看日志，全程不需要命令行。
 
 - ✅ 适配已部署 Docker 版小助手的玩家；还没部署的，先按下方 [完整部署教程](#完整部署教程从零开始) 从零搞定（约 20 分钟）
-- ✅ 压缩包发布：下载 `m7a_panel_m7a_panel_v1.18.zip` 解压后上传到网站目录即可使用，无数据库、无框架依赖（核心仅一个 `index.php`）
+- ✅ 压缩包发布：下载 `m7a_panel_m7a_panel_v1.19.zip` 解压后上传到网站目录即可使用，无数据库、无框架依赖（核心仅一个 `index.php`）
 - ✅ 手机、电脑浏览器均可使用
 
 ## 更新记录
 
 <details>
 <summary>📜 点击展开查看完整更新记录</summary>
+
+### v1.19（2026-10-01）
+
+- ✨ **新增游戏画面实时预览**：概览页新增「游戏画面」卡片，一键开启即可实时观看云游戏画面（约 15 帧/秒），跑日常任务、清体力时进度直接看，不用再猜"跑到哪了"；支持 720P / 480P 切换（外网流量紧张选 480P 省流）和一键全屏
+- ✨ **预览全自动鉴权**：画面通道使用面板登录态签发的按日轮换令牌（HMAC），未登录面板拿不到任何画面，游戏账号隐私不裸奔；未部署预览组件时卡片会给出明确提示，不影响其他功能
+- ⚡ **断线自动恢复**：小助手重启浏览器、容器重启、页面切后台再回来，预览都会自动重连，无需手动刷新；云游戏未运行时显示占位说明，任务开启后画面自动恢复
+- ⚡ **后台智能省流**：页面切到后台自动断开画面通道、回前台自动重连，手机上挂后台不偷跑流量
+- 📝 **预览组件可选部署**：压缩包新增 `preview_server.py` 帧流转发组件，按部署教程第 8 步执行几条命令即可启用；不部署则预览卡片保持提示状态，其他功能不受影响
 
 ### v1.18（2026-09-30）
 
@@ -380,13 +388,13 @@ docker compose logs -f     # 看到"开始运行"相关日志即正常
 - 防火墙放行对应端口
 
 ### 2. 上传并解压文件
-把下载的 `m7a_panel_m7a_panel_v1.18.zip` 压缩包上传到服务器并解压，将解压出来的**所有文件**（`index.php`、`README.md`、`LICENSE`、`.gitignore`）放到该站点根目录（如 `/www/wwwroot/你的服务器IP_端口/`）。
+把下载的 `m7a_panel_m7a_panel_v1.19.zip` 压缩包上传到服务器并解压，将解压出来的**所有文件**（`index.php`、`README.md`、`LICENSE`、`.gitignore`）放到该站点根目录（如 `/www/wwwroot/你的服务器IP_端口/`）。
 
-> ⚠️ **杀毒软件提示**：在 Windows 电脑本地解压压缩包时，若被杀毒软件（如 Windows Defender、360、火绒、腾讯管家等）拦截或误报，请先**暂停实时防护 / 关闭杀毒软件**再解压，或在杀毒软件中将该压缩包加入信任区。压缩包内仅包含 `index.php`、`README.md`、`LICENSE`、`.gitignore` 四个纯文本文件，不含任何可执行程序，误报是单文件 PHP 脚本的常见情况，请放心使用。
+> ⚠️ **杀毒软件提示**：在 Windows 电脑本地解压压缩包时，若被杀毒软件（如 Windows Defender、360、火绒、腾讯管家等）拦截或误报，请先**暂停实时防护 / 关闭杀毒软件**再解压，或在杀毒软件中将该压缩包加入信任区。压缩包内仅包含 `index.php`、`preview_server.py`、`README.md`、`LICENSE`、`.gitignore` 五个纯文本文件，不含任何可执行程序，误报是单文件 PHP 脚本的常见情况，请放心使用。
 
 **方法一：宝塔文件管理器（推荐）**
 1. 宝塔面板 → 文件 → 进入 `/www/wwwroot/你的服务器IP_端口/`
-2. 点击「上传」→ 选择本地的 `m7a_panel_m7a_panel_v1.18.zip`（支持拖拽上传）
+2. 点击「上传」→ 选择本地的 `m7a_panel_m7a_panel_v1.19.zip`（支持拖拽上传）
 3. 上传完成后，右键该压缩包 → 点击「解压」
 4. 解压后确认根目录下有 `index.php` 即为成功（`README.md` 是使用说明、`LICENSE` 是开源许可、`.gitignore` 是 Git 忽略规则，保留即可，不要删除）
 5. 资源监控（v1.13+）、版本备份（v1.14+）、计划任务（v1.15+）分别需要写入 `data/`、`backups/` 目录：解压后如没有这两个目录，请在站点根目录新建并给写权限（宝塔里右键目录 → 权限 → 设为 755，属主 www）；面板在需要时也会自动尝试创建（`data/` 内存放监控采样、任务历史与 `schedule.json` 计划任务）
@@ -394,7 +402,7 @@ docker compose logs -f     # 看到"开始运行"相关日志即正常
 **方法二：命令行解压**
 ```bash
 cd /www/wwwroot/你的服务器IP_端口/
-unzip m7a_panel_m7a_panel_v1.18.zip
+unzip m7a_panel_m7a_panel_v1.19.zip
 ls -l    # 确认 index.php 已在目录中
 mkdir -p data backups && chown -R www:www data backups && chmod 755 data backups   # v1.13+ 资源监控/任务历史数据目录（含 v1.15+ schedule.json）、v1.14+ 版本备份目录
 ```
@@ -426,6 +434,44 @@ chmod 666 /home/march7thassistant/config.yaml
 
 ### 7. 访问
 浏览器打开 `http://你的服务器IP:端口/`，首次访问设置密码即可使用。
+
+### 8. 游戏画面预览（可选组件，v1.19+）
+
+概览页「游戏画面」卡片可实时观看云游戏画面（约 15 帧/秒）。该功能依赖一个小型帧流转发组件（`preview_server.py`，压缩包内附带），SSH 到服务器执行以下命令即可启用：
+
+```bash
+# 1) 组件放进小助手日志目录（logs 已挂载进容器，容器重启不丢）
+cp preview_server.py /home/march7thassistant/logs/
+
+# 2) 生成预览令牌密钥（面板与组件各持一份，用于按日校验）
+openssl rand -hex 24 > /home/march7thassistant/logs/preview_secret
+chown root:www /home/march7thassistant/logs/preview_secret && chmod 640 /home/march7thassistant/logs/preview_secret
+
+# 3) 启动组件（容器内 9223 端口）+ 每分钟保活
+docker exec -d m7a sh -c "nohup python /m7a/logs/preview_server.py >> /m7a/logs/preview_server.log 2>&1 &"
+(crontab -l 2>/dev/null | grep -v preview_server.py; echo '* * * * * docker exec m7a sh -c '"'"'pgrep -f "previe[w]_server.py" >/dev/null || nohup python /m7a/logs/preview_server.py >> /m7a/logs/preview_server.log 2>&1 &'"'"' >/dev/null 2>&1') | crontab -
+```
+
+最后把面板站点的端口转发到组件端口（二选一）：
+
+- **宝塔站点反代（推荐）**：站点配置文件 `server{}` 内新增（`<容器IP>` 用 `docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' m7a` 查询）：
+
+```nginx
+location /m7a-preview/ {
+    proxy_pass http://<容器IP>:9223/;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_buffering off;
+    proxy_read_timeout 3600s;
+}
+```
+
+改完 `nginx -t` 校验通过后 `nginx -s reload` 生效。容器重建后 IP 可能变化，需更新 `proxy_pass` 里的 IP（或用 socat/systemd 做一层带自愈的中转）。
+
+- **不配置反代**：面板其他功能完全正常，仅预览卡片显示「预览服务未部署」提示。
+
+> 预览画面经面板登录态 + 按日轮换令牌双重保护；云游戏未运行时（小助手仅在任务时段开启浏览器）显示占位说明属正常现象。
 
 ## 测试更新源连接
 

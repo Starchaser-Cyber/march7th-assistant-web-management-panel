@@ -19,7 +19,7 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.18');           // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.19');           // 面板当前版本号（发版时手动修改）
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -2018,6 +2018,20 @@ function config_scheduled_tasks_count() {
     return $count;
 }
 
+/* ===== v1.19 游戏画面预览令牌 ===== */
+function preview_secret() {
+    $f = '/home/march7thassistant/logs/preview_secret';
+    $s = @file_get_contents($f);
+    $s = is_string($s) ? trim($s) : '';
+    return $s !== '' ? $s : '';
+}
+function preview_token() {
+    $s = preview_secret();
+    if ($s === '') return array('ok' => false, 'msg' => '预览服务未部署（服务器缺少 preview_secret）');
+    // 与 preview_server.py 保持一致：UTC 日期 + HMAC-SHA256 前 32 位，按天轮换
+    return array('ok' => true, 'token' => substr(hash_hmac('sha256', gmdate('Ymd'), $s), 0, 32));
+}
+
 /* ===== AJAX 请求 ===== */
 if (isset($_GET['ajax']) && is_auth()) {
     $ajax = $_GET['ajax'];
@@ -2132,6 +2146,11 @@ if (isset($_GET['ajax']) && is_auth()) {
     if ($ajax === 'alert_check') {
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode(alert_tick(false), JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    if ($ajax === 'preview_token') {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(preview_token(), JSON_UNESCAPED_UNICODE);
         exit;
     }
     exit;
@@ -4284,6 +4303,25 @@ html[data-theme="light"] .card { background:var(--glass-bg); }
         <div class="codebox" id="statusBox"><?php $st = container_status(); echo $st === '' ? '(无法获取，请检查 www 用户 docker 权限)' : h($st); ?></div>
       </div>
 
+      <!-- v1.19：游戏画面实时预览 -->
+      <div class="card" id="previewCard">
+        <h2><span class="icon">🎮</span> 游戏画面 <span class="badge" id="pvBadge" style="background:var(--muted,#8a8f98);color:#fff;">未开启</span>
+          <span style="margin-left:auto;display:flex;gap:6px;align-items:center;">
+            <select id="pvRes" onchange="pvSetRes(this.value)" style="display:none;font-size:12px;padding:4px 8px;border-radius:8px;border:1px solid var(--border);background:var(--card2);color:var(--text);">
+              <option value="720p">720P 流畅</option>
+              <option value="480p">480P 省流</option>
+            </select>
+            <button class="btn small gray" id="pvFull" onclick="pvFullscreen()" style="display:none;">全屏</button>
+            <button class="btn small" id="pvToggle" onclick="pvToggle()">开启预览</button>
+          </span>
+        </h2>
+        <div id="pvBox" style="position:relative;width:100%;aspect-ratio:16/9;background:#000;border-radius:10px;overflow:hidden;display:none;">
+          <img id="pvImg" style="position:absolute;inset:0;width:100%;height:100%;object-fit:contain;" alt="game preview">
+          <div id="pvMsg" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#aab2bd;font-size:14px;background:rgba(0,0,0,.55);text-align:center;padding:0 16px;">正在连接…</div>
+        </div>
+        <p class="tip" style="margin:10px 0 0;">云游戏运行期间可实时观看画面（约15帧/秒，任务执行时画面持续变化）；m7a 每天仅在任务时段开启浏览器，其余时间无画面属正常。预览已走面板登录鉴权，请勿泄露面板地址与预览令牌。</p>
+      </div>
+
       <div class="card">
         <?php
         $_monCfg = panel_config_load();
@@ -5664,6 +5702,101 @@ function initLogExport() {
   };
 }
 
+/* ===== v1.19 游戏画面实时预览 ===== */
+var pv = {ws:null, on:false, paused:false, res:'720p', retry:0, timer:null, lastFrame:0};
+function pvBase() {
+  var proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+  var base = location.pathname.replace(/\/[^\/]*$/, '/');
+  return proto + location.host + base + 'm7a-preview/ws';
+}
+function pvToggle() { pv.on ? pvStop() : pvStart(); }
+function pvStart() {
+  pv.on = true; pv.paused = false; pv.retry = 0;
+  document.getElementById('pvToggle').textContent = '停止预览';
+  document.getElementById('pvBox').style.display = 'block';
+  document.getElementById('pvRes').style.display = '';
+  document.getElementById('pvFull').style.display = '';
+  pvConnect();
+  pv.timer = setInterval(pvWatch, 3000);
+}
+function pvStop() {
+  pv.on = false; pv.paused = true;
+  if (pv.timer) { clearInterval(pv.timer); pv.timer = null; }
+  if (pv.ws) { try { pv.ws.close(); } catch(e) {} pv.ws = null; }
+  document.getElementById('pvToggle').textContent = '开启预览';
+  document.getElementById('pvBadge').textContent = '未开启';
+  document.getElementById('pvBadge').style.background = 'var(--muted,#8a8f98)';
+  document.getElementById('pvBox').style.display = 'none';
+  document.getElementById('pvRes').style.display = 'none';
+  document.getElementById('pvFull').style.display = 'none';
+}
+function pvConnect() {
+  if (!pv.on) return;
+  var msg = document.getElementById('pvMsg');
+  msg.style.display = 'flex';
+  msg.textContent = '正在连接…';
+  fetch('?ajax=preview_token').then(function(r){ return r.json(); }).then(function(d) {
+    if (!d.ok) { msg.textContent = d.msg || '获取预览令牌失败'; return; }
+    var ws = new WebSocket(pvBase() + '?token=' + d.token + '&res=' + pv.res);
+    pv.ws = ws;
+    ws.binaryType = 'arraybuffer';
+    ws.onopen = function() {
+      pv.retry = 0; pv.lastFrame = Date.now();
+      pvBadge('已连接', 'var(--amber,#f59e0b)');
+    };
+    ws.onmessage = function(ev) {
+      var img = document.getElementById('pvImg');
+      var old = img.src;
+      img.src = URL.createObjectURL(new Blob([ev.data], {type:'image/jpeg'}));
+      if (old && old.indexOf('blob:') === 0) URL.revokeObjectURL(old);
+      pv.lastFrame = Date.now();
+      document.getElementById('pvMsg').style.display = 'none';
+      pvBadge('实时', 'var(--green,#22c55e)');
+    };
+    ws.onclose = function() {
+      if (pv.ws !== ws) return;
+      pv.ws = null;
+      if (!pv.on || pv.paused) return;
+      pvBadge('重连中', 'var(--amber,#f59e0b)');
+      var delay = Math.min(10000, 1000 * Math.pow(2, pv.retry++));
+      setTimeout(function() { if (pv.on && !pv.paused && !pv.ws) pvConnect(); }, delay);
+    };
+    ws.onerror = function() { try { ws.close(); } catch(e) {} };
+  }).catch(function(e) { msg.textContent = '连接失败：' + e; });
+}
+function pvBadge(text, bg) {
+  var b = document.getElementById('pvBadge');
+  b.textContent = text;
+  b.style.background = bg;
+}
+function pvWatch() {
+  if (!pv.on || !pv.ws || pv.ws.readyState !== 1) return;
+  if (pv.lastFrame && Date.now() - pv.lastFrame > 8000) {
+    var m = document.getElementById('pvMsg');
+    m.style.display = 'flex';
+    m.textContent = '画面静止或云游戏未运行（任务运行期间自动恢复）';
+    pvBadge('无画面', 'var(--amber,#f59e0b)');
+  }
+}
+function pvSetRes(v) {
+  pv.res = v;
+  if (pv.ws) { try { pv.ws.close(); } catch(e) {} pv.ws = null; }
+  if (pv.on) pvConnect();
+}
+function pvFullscreen() {
+  var el = document.getElementById('pvBox');
+  if (document.fullscreenElement) { document.exitFullscreen(); return; }
+  if (el.requestFullscreen) el.requestFullscreen();
+}
+document.addEventListener('visibilitychange', function() {
+  if (document.hidden) {
+    pv.paused = true;
+    if (pv.ws) { try { pv.ws.close(); } catch(e) {} pv.ws = null; }
+  } else {
+    pv.paused = false;
+    if (pv.on && !pv.ws) pvConnect();
+  }
+});
 function refreshStatus() {
   fetch('?ajax=status').then(function(r) { return r.text(); }).then(function(t) {
     var box = document.getElementById('statusBox');
