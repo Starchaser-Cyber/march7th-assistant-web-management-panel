@@ -19,7 +19,10 @@ define('CSRF_KEY', 'm7a_panel_csrf');
  * 发版流程：改 PANEL_VERSION → git push → 在 Gitea/GitHub 打 tag（如 v1.0）并创建 Release
  * UPDATE_TYPE: gitea / github
  */
-define('PANEL_VERSION', '1.19');           // 面板当前版本号（发版时手动修改）
+define('PANEL_VERSION', '1.20');           // 面板当前版本号（发版时手动修改）
+/* v1.20：本项目（PHP 版）已停止维护，面板内提示用户迁移到 Python 重构版 */
+define('NEW_REPO_URL', 'https://github.com/Starchaser-Cyber/march7th-assistant-web-management-panel-python-remake');
+define('NEW_REPO_NAME', 'march7th-assistant-web-management-panel-python-remake');
 define('UPDATE_ENABLED', true);              // 是否启用自动检查更新
 define('UPDATE_TYPE', 'github');              // 更新源类型：gitea 或 github
 define('UPDATE_HOST', 'https://github.com');  // Gitea 实例地址（UPDATE_TYPE=gitea 时生效）
@@ -3427,6 +3430,37 @@ html[data-theme="dark"] .sidebar { background:rgba(30,18,40,.66); }
   transition:transform var(--dur-1, .12s) var(--ease, ease);
 }
 .log-tools button:active { transform:scale(.95); }
+/* ===== v1.20：日志智能跟随 ===== */
+.log-wrap { position:relative; }
+.log-auto-tip {
+  display:none; align-items:center; gap:4px;
+  font-size:12px; color:var(--primary);
+  background:rgba(255,145,220,.12); border:1px solid rgba(255,145,220,.35);
+  padding:6px 10px; border-radius:10px;
+}
+.log-back-bottom {
+  display:none; align-items:center; gap:6px;
+  position:absolute; right:16px; bottom:16px; z-index:6;
+  padding:8px 14px; border:none; border-radius:999px;
+  background:var(--grad); color:#fff; font-size:13px; font-weight:600;
+  font-family:inherit; cursor:pointer; box-shadow:var(--shadow);
+}
+.log-back-bottom:hover { filter:brightness(1.08); }
+.log-back-bottom:active { transform:scale(.97); }
+.log-back-bottom span { font-weight:400; opacity:.9; }
+/* ===== v1.20：停止维护公告 ===== */
+.eol-card { border:1px solid rgba(255,145,220,.38); background:var(--card); }
+.eol-badge {
+  display:inline-block; font-size:12px; padding:3px 10px; border-radius:999px; vertical-align:middle;
+  background:rgba(255,145,220,.18); color:var(--primary); border:1px solid rgba(255,145,220,.4);
+}
+.eol-tip { margin:12px 0 14px; color:var(--muted); font-size:13px; line-height:1.9; }
+.eol-adv { list-style:none; margin:0 0 14px; padding:0; display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:10px; }
+.eol-adv li { font-size:13px; line-height:1.7; padding:10px 12px; border-radius:10px; background:var(--glass-bg); border:1px solid var(--border); }
+.eol-adv b { color:var(--primary); }
+.eol-link { display:flex; flex-wrap:wrap; align-items:center; gap:10px; padding:12px; border-radius:10px; background:var(--glass-bg); border:1px solid var(--border); }
+.eol-link code { font-size:12px; word-break:break-all; color:var(--muted); flex:1 1 240px; }
+a.btn { text-decoration:none; display:inline-flex; align-items:center; justify-content:center; }
 .sheet-overlay {
   position:fixed; inset:0; z-index:400; background:rgba(20,8,30,.45);
   -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px);
@@ -4444,6 +4478,7 @@ html[data-theme="light"] .card { background:var(--glass-bg); }
           <div class="info-item"><div class="label">更新源类型</div><div class="value"><?php echo h(strtoupper(UPDATE_TYPE)); ?></div></div>
           <div class="info-item"><div class="label">当前版本</div><div class="value">v<?php echo h(PANEL_VERSION); ?></div></div>
           <div class="info-item"><div class="label">仓库</div><div class="value" style="font-size:13px;"><?php echo h(UPDATE_OWNER . '/' . UPDATE_REPO); ?></div></div>
+          <div class="info-item"><div class="label">新版项目</div><div class="value" style="font-size:13px;"><a href="<?php echo h(NEW_REPO_URL); ?>" target="_blank" rel="noopener" style="color:var(--primary);">Python 重构版 ↗</a></div></div>
           <div class="info-item"><div class="label">更新模式</div><div class="value"><select id="panelUpdateMode" onchange="setUpdateMode(this.value)" style="font-size:13px;"><option value="auto"<?php echo panel_update_mode() === 'auto' ? ' selected' : ''; ?>>自动检查</option><option value="manual"<?php echo panel_update_mode() === 'manual' ? ' selected' : ''; ?>>手动更新</option></select></div></div>
           <div class="info-item"><div class="label">检查更新</div><div class="value"><button class="btn small primary" onclick="checkUpdate(true)">立即检查</button></div></div>
           <div class="info-item"><div class="label">API 连通</div><div class="value" id="srcApiStatus">未测试</div></div>
@@ -4836,16 +4871,73 @@ html[data-theme="light"] .card { background:var(--glass-bg); }
         </div>
         <div class="log-count" id="logCount" style="margin-bottom:8px;"></div>
         <div class="log-tools">
-          <label><input type="checkbox" id="logFollow" checked> 自动跟随</label>
+          <label title="开启后新日志会自动滚到底部；手动向上翻看历史时会暂停跟随，点「回到底部」即可恢复"><input type="checkbox" id="logFollow" checked onchange="logFollowChange()"> 自动跟随</label>
+          <span class="log-auto-tip" id="logAutoTip" style="display:none;">⏸ 已暂停跟随（正在翻看历史日志）</span>
           <button type="button" onclick="logJumpBottom()">⤓ 到底</button>
           <button type="button" onclick="copyLogText()">📋 复制</button>
         </div>
-        <div class="codebox" id="logBox" style="max-height:600px;"><div style="color:var(--muted);">日志加载中…</div></div>
+        <div class="log-wrap">
+          <div class="codebox" id="logBox" style="max-height:600px;"><div style="color:var(--muted);">日志加载中…</div></div>
+          <button type="button" class="log-back-bottom" id="logBackBottom" onclick="logJumpBottom()" style="display:none;">⤓ 回到底部<span id="logNewBadge"></span></button>
+        </div>
       </div>
     </div>
 
+    <!-- ===== v1.20：停止维护公告 ===== -->
+    <div class="card eol-card">
+      <div class="card-head">
+        <div class="card-title">⚠️ 本项目已停止维护<span class="eol-badge">PHP 版 · 最终版本 v1.20</span></div>
+      </div>
+      <div class="eol-tip">
+        这个 PHP 版本（v1.20）是最后一个版本，此后不再更新维护。<br>
+        项目已用 <b style="color:var(--primary);">Python 全面重构</b>，新版本功能更全、运行更稳，面板与配置可以直接沿用，<b style="color:var(--primary);">升级不用重新部署</b>。
+      </div>
+      <ul class="eol-adv">
+        <li><b>运行更稳</b>：Python + FastAPI 常驻服务，进程崩溃自动重启，不再靠网页请求触发</li>
+        <li><b>实时更快</b>：WebSocket 推送，状态与日志秒级刷新，无需轮询等待</li>
+        <li><b>功能更全</b>：告警重试与去重、监控自定义时段、告警时间轴、计划任务日历视图</li>
+        <li><b>更新更安全</b>：更新前自动备份、换入前校验、失败自动回滚，杜绝升级后面板打不开</li>
+        <li><b>升级不搬家</b>：实例、账号、配置直接复用，无需重新配置</li>
+        <li><b>更好维护</b>：200+ 自动化测试覆盖，改动有保障</li>
+      </ul>
+      <div class="eol-link">
+        <code id="eolUrl"><?php echo h(NEW_REPO_URL); ?></code>
+        <button type="button" class="btn" onclick="copyEolUrl()">📋 复制地址</button>
+        <a class="btn" href="<?php echo h(NEW_REPO_URL); ?>" target="_blank" rel="noopener">↗ 打开新版项目</a>
+      </div>
+    </div>
   </div><!-- /content -->
 </div><!-- /layout -->
+
+<!-- ===== v1.20：停止维护提示弹窗 ===== -->
+<div class="modal-overlay" id="eolModal" style="display:none;" onclick="if(event.target===this)closeEolNotice()">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="modal-title">⚠️ 本项目已停止维护</div>
+      <button type="button" class="icon-btn" onclick="closeEolNotice()" style="font-size:18px;">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="tip" style="margin-bottom:12px;">
+        PHP 版（v1.20）为最后一个版本，此后不再更新。<br>
+        项目已用 <b style="color:var(--primary);">Python 全面重构</b>，功能更全、更稳定，欢迎迁移到新版本。
+      </div>
+      <ul class="eol-adv" style="grid-template-columns:1fr;">
+        <li><b>运行更稳</b>：常驻服务 + 崩溃自动重启，告别刷新就白屏</li>
+        <li><b>更新更安全</b>：更新自动备份、失败回滚，升级不再有风险</li>
+        <li><b>功能更全</b>：告警重试/去重、监控时段、告警时间轴、计划任务日历</li>
+        <li><b>升级不搬家</b>：实例与配置直接复用，不用重新部署</li>
+      </ul>
+      <div class="eol-link">
+        <code id="eolUrl2"><?php echo h(NEW_REPO_URL); ?></code>
+        <button type="button" class="btn" onclick="copyEolUrl()">📋 复制地址</button>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px;">
+        <a class="btn" href="<?php echo h(NEW_REPO_URL); ?>" target="_blank" rel="noopener">↗ 去新版项目</a>
+        <button type="button" class="btn" onclick="closeEolNotice()">我知道了</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ===== 实例管理弹窗 ===== -->
 <div class="modal-overlay" id="instModal" style="display:none;" onclick="if(event.target===this)closeInstModal()">
@@ -5561,6 +5653,78 @@ function fillLogFiles(files, current) {
   }
   sel.innerHTML = html || '<option value="">（无日志文件）</option>';
 }
+/* ===== v1.20：日志智能跟随（自动滚底 / 上滑暂停 / 回到底部 / 增量渲染） ===== */
+var LOG_FOLLOW_KEY = 'm7a_log_follow';
+var _logStick = true;         // 是否保持跟随到底部
+var _logLines = null;         // 上次渲染的原始行数组（用于增量追加）
+var _logKey = '';             // 上次筛选参数（变化即视为重载）
+var _logNew = 0;              // 暂停跟随期间新增的行数
+var _logAutoScroll = false;   // 程序滚动标记（避免误判为用户上滑）
+
+function logFollowEnabled() {
+  var el = document.getElementById('logFollow');
+  return !el || el.checked;
+}
+
+/* 恢复上次的「自动跟随」偏好（默认开启） */
+function logFollowRestore() {
+  var el = document.getElementById('logFollow');
+  if (!el) return;
+  var v = null;
+  try { v = localStorage.getItem(LOG_FOLLOW_KEY); } catch (e) {}
+  el.checked = (v === '0') ? false : true;
+}
+
+/* 用户手动切换开关：记住偏好 */
+function logFollowChange() {
+  var on = logFollowEnabled();
+  try { localStorage.setItem(LOG_FOLLOW_KEY, on ? '1' : '0'); } catch (e) {}
+  if (on) {
+    _logStick = true; _logNew = 0;
+    logScrollToBottom();
+  }
+  logUpdateHint();
+}
+
+function logScrollToBottom() {
+  var box = document.getElementById('logBox');
+  if (!box) return;
+  _logAutoScroll = true;
+  box.scrollTop = box.scrollHeight;
+  setTimeout(function() { _logAutoScroll = false; }, 80);
+}
+
+function logAtBottom(box) {
+  if (!box) return true;
+  return box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+}
+
+/* 暂停跟随时给出提示与「回到底部」入口 */
+function logUpdateHint() {
+  var tip = document.getElementById('logAutoTip');
+  var btn = document.getElementById('logBackBottom');
+  var badge = document.getElementById('logNewBadge');
+  var paused = logFollowEnabled() && !_logStick;
+  if (tip) tip.style.display = paused ? 'inline-flex' : 'none';
+  if (btn) btn.style.display = paused ? 'inline-flex' : 'none';
+  if (badge) badge.textContent = (paused && _logNew > 0) ? '· ' + _logNew + ' 条新日志' : '';
+}
+
+/* 绑定日志区滚动：贴底恢复跟随；主动上滑则暂停（不打断查看历史） */
+function logBindScroll() {
+  var box = document.getElementById('logBox');
+  if (!box || box._logBound) return;
+  box._logBound = true;
+  box.addEventListener('scroll', function() {
+    if (_logAutoScroll) return;
+    if (logAtBottom(box)) {
+      if (!_logStick) { _logStick = true; _logNew = 0; logUpdateHint(); }
+    } else {
+      if (_logStick) { _logStick = false; logUpdateHint(); }
+    }
+  });
+}
+
 function refreshLog() {
   fetch('?ajax=log&' + logFilterParams()).then(function(r) { return r.json(); }).then(function(d) {
     if (!d || !d.ok) return;
@@ -5570,24 +5734,83 @@ function refreshLog() {
     if (typeof d.lines === 'string') {
       if (box) box.innerHTML = '<div style="color:var(--muted);">' + escapeHtml(d.lines) + '</div>';
       if (countEl) countEl.textContent = '';
+      _logLines = null; _logKey = '';
       return;
     }
     var kw = document.getElementById('logKeyword') ? document.getElementById('logKeyword').value.trim() : '';
-    var hasFilter = kw !== '' || (document.getElementById('logLevel') && document.getElementById('logLevel').value !== '') || (document.getElementById('logHours') && document.getElementById('logHours').value !== '0');
-    var html = d.lines.map(function(line) { return renderLogLine(line, kw); }).join('\n');
-    if (box) {
-      var atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
-      box.innerHTML = html;
-      var follow = !document.getElementById('logFollow') || document.getElementById('logFollow').checked;
-      if (!hasFilter && (follow || atBottom)) box.scrollTop = box.scrollHeight;
+    var lines = d.lines || [];
+    var key = logFilterParams();
+    var appended = 0;
+    if (!box) {
+      if (countEl) countEl.textContent = '命中 ' + d.total + ' 条';
+      _logLines = lines; _logKey = key;
+      return;
     }
+    var sameTail = _logLines && _logLines.length > 0 && key === _logKey
+        && lines.length >= _logLines.length
+        && lines[0] === _logLines[0]
+        && lines[_logLines.length - 1] === _logLines[_logLines.length - 1];
+    var sameAll = _logLines && key === _logKey && lines.length === _logLines.length
+        && (lines.length === 0 || (lines[0] === _logLines[0] && lines[lines.length - 1] === _logLines[lines.length - 1]));
+    if (sameAll) {
+      /* 内容完全没变：不动 DOM，避免打断选中与滚动 */
+    } else if (sameTail && _logLines.length > 0) {
+      /* 只在尾部追加新行，不重建整块 DOM */
+      var frag = document.createElement('div');
+      frag.innerHTML = lines.slice(_logLines.length).map(function(line) { return renderLogLine(line, kw); }).join('\n');
+      while (frag.firstChild) box.appendChild(frag.firstChild);
+      appended = lines.length - _logLines.length;
+    } else {
+      /* 首行变化 / 条数减少 / 换筛选：整段重建 */
+      box.innerHTML = lines.map(function(line) { return renderLogLine(line, kw); }).join('\n');
+      appended = lines.length;
+    }
+    _logLines = lines; _logKey = key;
+    if (logFollowEnabled() && _logStick) {
+      _logNew = 0;
+      logScrollToBottom();
+    } else if (appended > 0) {
+      _logNew += appended;
+    }
+    logUpdateHint();
     if (countEl) countEl.textContent = '命中 ' + d.total + ' 条';
   }).catch(function() {});
 }
 /* ===== v1.17：日志工具 / 回到顶部 / 中央快捷键 ===== */
+function copyEolUrl() {
+  var url = '<?php echo h(NEW_REPO_URL); ?>';
+  var done = function(ok) { miniToast(ok ? '新版项目地址已复制' : '复制失败，请手动选择复制'); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(function() { done(true); }).catch(function() { done(false); });
+    return;
+  }
+  try {
+    var ta = document.createElement('textarea');
+    ta.value = url; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    var ok = document.execCommand('copy');
+    document.body.removeChild(ta); done(ok);
+  } catch (e) { done(false); }
+}
+function showEolNotice() {
+  var seen = null;
+  try { seen = localStorage.getItem('m7a_eol_seen'); } catch (e) {}
+  if (seen === '1') return;
+  var m = document.getElementById('eolModal');
+  if (m) m.style.display = 'flex';
+}
+function closeEolNotice() {
+  try { localStorage.setItem('m7a_eol_seen', '1'); } catch (e) {}
+  var m = document.getElementById('eolModal');
+  if (m) m.style.display = 'none';
+}
 function logJumpBottom() {
   var box = document.getElementById('logBox');
-  if (box) box.scrollTop = box.scrollHeight;
+  _logStick = true; _logNew = 0;
+  var el = document.getElementById('logFollow');
+  if (el && !el.checked) { el.checked = true; try { localStorage.setItem(LOG_FOLLOW_KEY, '1'); } catch (e) {} }
+  logScrollToBottom();
+  logUpdateHint();
 }
 function copyLogText() {
   var box = document.getElementById('logBox');
@@ -6105,11 +6328,14 @@ function goCfg(ref) {
 })();
 
 // Init
+logFollowRestore();
+logBindScroll();
 refreshStatus();
 refreshLog();
 startAutoRefresh();
 initLogExport();
 loadECharts(function(){ loadMonitor(); });
+showEolNotice();
 startMonitor();
 /* v1.18：搜索输入绑定 + 全局快捷键 + 告警巡检心跳 */
 (function() {
